@@ -5,7 +5,10 @@ import redis as _redis
 import os
 from pymongo import MongoClient
 
-pool = _redis.ConnectionPool(host='localhost', port=6379, db=1)
+redis_host = os.environ.get('REDIS_SERVER', 'localhost')
+redis_port = int(os.environ.get('REDIS_PORT', 6379))
+redis_db = int(os.environ.get('REDIS_DB', 1))
+pool = _redis.ConnectionPool(host=redis_host, port=redis_port, db=redis_db)
 mongo_client = MongoClient()
 
 
