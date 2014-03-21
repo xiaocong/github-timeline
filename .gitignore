@@ -1,0 +1,11 @@
+*.class
+bin
+libs
+build
+dist
+.classpath
+.project
+*.pyc
+*.egg
+.tox
+.coverage
