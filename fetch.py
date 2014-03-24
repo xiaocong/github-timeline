@@ -65,8 +65,17 @@ def data_processer(q):
         for func in fn:
             try:
                 _process(filename, func)
-            except:
+            except Exception as e:
                 print("Error during processing %s." % filename)
+                print(e)
+
+
+def _gen_json(lines):
+    for line in lines:
+        try:
+            yield json.loads(line)
+        except Exception as e:
+            print "Error during load json: %s" % e
 
 
 def _process(filename, fn):
@@ -83,26 +92,45 @@ def _process(filename, fn):
         return
 
     pipe = r.pipeline()
-    pipe.sadd(fn_key, fn_value)
+    fn_index_key = _format('function:%s:index' % fn.__name__)
+    fn_index_values = []
+
+    def _process_lines(index, lines):
+        fn_index_value = "{year}-{month:02d}-{day:02d}-{hour}-{index}".format(
+            year=year, month=month, day=day, hour=hour, index=index
+        )
+        pipe.sismember(fn_index_key, fn_index_value)
+        if pipe.execute()[0]:
+            return
+
+        data = _gen_json(lines)
+        fn(pipe, data, year, month, day, hour)
+        pipe.sadd(fn_index_key, fn_index_value)
+        pipe.execute()
+        fn_index_values.append(fn_index_value)
+
+    buf_lines = 1000
     with gzip.GzipFile(filename) as f:
         repl = lambda m: ''
         content = f.read().decode("utf-8", errors="ignore")
         content = re.sub(u"[^\\}]([\\n\\r\u2028\u2029]+)[^\\{]", repl, content)
         content = '}\n{"'.join(content.split('}{"'))
-        data = []
-        for line in content.splitlines():
+        lines = content.splitlines()
+        index = 0
+        while index < len(lines):
+            print('Processing %s: lines %d' % (filename, index))
             try:
-                data.append(json.loads(line))
-            except:
-                print('Error when parsing json data.')
-        if fn:
-            fn(pipe, data, year, month, day, hour)
+                _process_lines(index/buf_lines, lines[index:index+buf_lines])
+            except Exception as e:
+                print str(e)
+            index += buf_lines
+    for k in fn_index_values:
+        pipe.srem(fn_index_key, k)
+    pipe.sadd(fn_key, fn_value)
     pipe.execute()
 
 
 def process_user(pipe, data, year, month, day, hour):
-    if type(data) is not list:
-        data = [data]
     weekday = date(year=year, month=month, day=day).strftime("%w")
     year_month = "{year}-{month:02d}".format(year=year, month=month)
     for event in data:
@@ -201,7 +229,7 @@ def fetch_all(since=datetime(2011, 2, 12)):
                               since.month,
                               since.day,
                               since.hour + i,
-                              process_user) for i in range(12)]
+                              process_user) for i in range(24)]
         gevent.joinall(procs)
         since += timedelta(days=1)
     queue.put(StopIteration)

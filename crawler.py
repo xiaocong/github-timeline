@@ -110,8 +110,8 @@ def worker(q):
     for name in q:
         try:
             while not update_user(name):
-                print("Holding thread for 1 hour.")
-                time.sleep(60*60)
+                print("Holding thread for 10 minutes.")
+                time.sleep(10*60)
         except:
             pass
 
