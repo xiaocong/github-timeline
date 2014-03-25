@@ -14,7 +14,7 @@ class RPCService(object):
 
     @zerorpc.stream
     def traverse(self):
-        since = datetime(2012, 4, 1)
+        since = datetime(2012, 1, 1)
         while True:
             if since < datetime.today() - timedelta(days=3):
                 yield [since.year, since.month, since.day, since.hour]
