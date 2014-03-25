@@ -7,7 +7,6 @@ monkey.patch_all()
 
 import gevent
 import gevent.queue
-from datetime import datetime, timedelta, date
 import os
 import re
 import json
@@ -15,8 +14,11 @@ import requests
 import shutil
 import gzip
 from tempfile import NamedTemporaryFile
+import zerorpc
+import StringIO
+from datetime import date
 
-from db import redis
+import db
 from db import format_key as _format
 
 # The URL template for the GitHub Archive.
@@ -54,36 +56,22 @@ def fetch_one(year, month, day, hour):
     return None
 
 
-def fetch_and_process(q, year, month, day, hour, fn):
-    q.put((fetch_one(year, month, day, hour), fn))
-
-
-def data_processer(q):
-    for filename, fn in q:
-        if type(fn) is not list:
-            fn = [fn]
-        for func in fn:
-            try:
-                _process(filename, func)
-            except Exception as e:
-                print("Error during processing %s." % filename)
-                print(e)
-
-
-def _gen_json(lines):
-    for line in lines:
+def _gen_json(buf):
+    line = buf.readline()
+    while line:
         try:
             yield json.loads(line)
         except Exception as e:
             print "Error during load json: %s" % e
+        line = buf.readline()
 
 
-def _process(filename, fn):
+def file_process(filename, fn):
     print('Processing %s with %s' % (filename, fn.__name__))
     if not filename or not os.path.exists(filename):
         return
     year, month, day, hour = map(int, date_re.findall(filename)[0])
-    r = redis()
+    r = db.redis()
     fn_key = _format('function:%s' % fn.__name__)
     fn_value = "{year}-{month:02d}-{day:02d}-{hour}".format(
         year=year, month=month, day=day, hour=hour
@@ -91,49 +79,22 @@ def _process(filename, fn):
     if r.sismember(fn_key, fn_value):
         return
 
-    pipe = r.pipeline()
-    fn_index_key = _format('function:%s:index' % fn.__name__)
-    fn_index_values = []
-
-    def _process_lines(index, lines):
-        fn_index_value = "{year}-{month:02d}-{day:02d}-{hour}-{index}".format(
-            year=year, month=month, day=day, hour=hour, index=index
-        )
-        pipe.sismember(fn_index_key, fn_index_value)
-        if pipe.execute()[0]:
-            return
-
-        data = _gen_json(lines)
-        fn(pipe, data, year, month, day, hour)
-        pipe.sadd(fn_index_key, fn_index_value)
-        pipe.execute()
-        fn_index_values.append(fn_index_value)
-
-    buf_lines = 1000
     with gzip.GzipFile(filename) as f:
         repl = lambda m: ''
         content = f.read().decode("utf-8", errors="ignore")
         content = re.sub(u"[^\\}]([\\n\\r\u2028\u2029]+)[^\\{]", repl, content)
         content = '}\n{"'.join(content.split('}{"'))
-        lines = content.splitlines()
-        index = 0
-        while index < len(lines):
-            print('Processing %s: lines %d' % (filename, index))
-            try:
-                _process_lines(index/buf_lines, lines[index:index+buf_lines])
-            except Exception as e:
-                print str(e)
-            index += buf_lines
-    for k in fn_index_values:
-        pipe.srem(fn_index_key, k)
-    pipe.sadd(fn_key, fn_value)
-    pipe.execute()
+        buf = StringIO.StringIO(content)
+        fn(_gen_json(buf), year, month, day, hour)
+    r.sadd(fn_key, fn_value)
 
 
-def process_user(pipe, data, year, month, day, hour):
+def events_process(events, year, month, day, hour):
     weekday = date(year=year, month=month, day=day).strftime("%w")
     year_month = "{year}-{month:02d}".format(year=year, month=month)
-    for event in data:
+    pipe = db.pipe()
+    users_stats = db.mongodb().users_stats
+    for event in events:
         actor = event["actor"]
         attrs = event.get("actor_attributes", {})
         if actor is None or attrs.get("type") != "User":
@@ -168,22 +129,16 @@ def process_user(pipe, data, year, month, day, hour):
                      year_month, nevents)
 
         # User schedule histograms.
-        pipe.hincrby(_format("user:{0}:day".format(key)), weekday, nevents)
-        pipe.hincrby(_format("user:{0}:hour".format(key)), hour, nevents)
-        pipe.hincrby(_format("user:{0}:month".format(key)), year_month, nevents)
-
-        # User event type histogram.
-        pipe.zincrby(_format("user:{0}:event".format(key)),
-                     evttype, nevents)
-        pipe.hincrby(_format("user:{0}:event:{1}:day".format(key,
-                                                             evttype)),
-                     weekday, nevents)
-        pipe.hincrby(_format("user:{0}:event:{1}:hour".format(key,
-                                                              evttype)),
-                     hour, nevents)
-        pipe.hincrby(_format("user:{0}:event:{1}:month".format(key,
-                                                               evttype)),
-                     year_month, nevents)
+        user_update = {
+            '$inc': {
+                'day.%s' % weekday: nevents,
+                'hour.%02d' % hour: nevents,
+                'month.%04d.%02d' % (year, month): nevents,
+                'event.%s.day.%s' % (evttype, weekday): nevents,
+                'event.%s.hour.%02d' % (evttype, hour): nevents,
+                'event.%s.month.%04d.%02d' % (evttype, year, month): nevents
+            }
+        }
 
         # Parse the name and owner of the affected repository.
         repo = event.get("repository", {})
@@ -209,32 +164,38 @@ def process_user(pipe, data, year, month, day, hour):
                 if evttype == "PushEvent":
                     pipe.zincrby(_format("pushes:lang"), language, nevents)
 
-                pipe.zincrby(_format("user:{0}:lang".format(key)),
-                             language, nevents)
+                user_update['$inc']['lang.%s' % language] = nevents
 
                 # Who are the most important users of a language?
                 if contribution:
                     pipe.zincrby(_format("lang:{0}:user".format(language)),
                                  key, nevents)
+        users_stats.update({'_id': key}, user_update, True)
+    pipe.execute()
 
 
-def fetch_all(since=datetime(2012, 4, 12)):
+def traverse_all(fn):
 # def fetch_all(since=datetime(2011, 2, 12)):
-    today = datetime.today()
-    queue = gevent.queue.Queue()
-    worker = gevent.spawn(data_processer, queue)
-    while since < today:
-        procs = [gevent.spawn(fetch_and_process,
-                              queue,
-                              since.year,
-                              since.month,
-                              since.day,
-                              since.hour + i,
-                              process_user) for i in range(24)]
-        gevent.joinall(procs)
-        since += timedelta(days=1)
-    queue.put(StopIteration)
-    worker.join()
+    c = zerorpc.Client()
+    c.connect("tcp://%s:4242" % os.environ.get("RPC_SERVER", "localhost"))
+    q = gevent.queue.Queue(32)
+
+    def worker():
+        for year, month, day, hour in q:
+            filename = fetch_one(year, month, day, hour)
+            if filename:
+                try:
+                    file_process(filename, fn)
+                except Exception as e:
+                    print "Error during processing %s: %s" % (filename, e)
+
+    workers = [gevent.spawn(worker) for i in range(4)]
+    for year, month, day, hour in c.traverse():
+        q.put([year, month, day, hour])
+
+    for w in workers:
+        q.put(StopIteration)
+    gevent.joinall(workers)
 
 if __name__ == "__main__":
-    fetch_all()
+    traverse_all(events_process)

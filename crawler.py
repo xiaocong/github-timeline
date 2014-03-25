@@ -28,7 +28,7 @@ def get_github_credential():
 
 def update_user(username):
     username = username.lower()
-    users = mongodb().usersinfo
+    users = mongodb().users_info
     user = users.find_one({"_id": username})
     etag = user.get("etag", None) if user else None
     location = user.get("location", None) if user else None
