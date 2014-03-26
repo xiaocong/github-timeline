@@ -14,7 +14,8 @@ import requests
 import shutil
 import gzip
 from tempfile import NamedTemporaryFile
-import zerorpc
+from datetime import datetime, timedelta
+from time import sleep
 import StringIO
 from datetime import date
 
@@ -176,8 +177,6 @@ def events_process(events, year, month, day, hour):
 
 def traverse_all(fn):
 # def fetch_all(since=datetime(2011, 2, 12)):
-    c = zerorpc.Client()
-    c.connect("tcp://%s:4242" % os.environ.get("RPC_SERVER", "localhost"))
     q = gevent.queue.Queue(32)
 
     def worker():
@@ -189,9 +188,14 @@ def traverse_all(fn):
                 except Exception as e:
                     print "Error during processing %s: %s" % (filename, e)
 
-    workers = [gevent.spawn(worker) for i in range(4)]
-    for year, month, day, hour in c.traverse():
-        q.put([year, month, day, hour])
+    workers = [gevent.spawn(worker) for i in range(8)]
+    since = datetime(2012, 1, 1)
+    while True:
+        if since < datetime.today() - timedelta(days=3):
+            q.put([since.year, since.month, since.day, since.hour])
+            since += timedelta(hours=1)
+        else:
+            sleep(3600 * 24)
 
     for w in workers:
         q.put(StopIteration)
