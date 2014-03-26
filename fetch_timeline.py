@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from time import sleep
 import StringIO
 from datetime import date
+from collections import defaultdict
 
 import db
 from db import format_key as _format
@@ -90,11 +91,17 @@ def file_process(filename, fn):
     r.sadd(fn_key, fn_value)
 
 
+def _mongo_default():
+    return defaultdict(lambda: defaultdict(int))
+
+
 def events_process(events, year, month, day, hour):
     weekday = date(year=year, month=month, day=day).strftime("%w")
     year_month = "{year}-{month:02d}".format(year=year, month=month)
     pipe = db.pipe()
-    users_stats = db.mongodb().users_stats
+    users = defaultdict(_mongo_default)
+    repos = defaultdict(_mongo_default)
+    languages = defaultdict(_mongo_default)
     for event in events:
         actor = event["actor"]
         attrs = event.get("actor_attributes", {})
@@ -118,6 +125,7 @@ def events_process(events, year, month, day, hour):
         pipe.incr(_format("total"), nevents)
         pipe.hincrby(_format("day"), weekday, nevents)
         pipe.hincrby(_format("hour"), hour, nevents)
+        pipe.hincrby(_format("month"), year_month, nevents)
         pipe.zincrby(_format("user"), key, nevents)
         pipe.zincrby(_format("event"), evttype, nevents)
 
@@ -130,26 +138,29 @@ def events_process(events, year, month, day, hour):
                      year_month, nevents)
 
         # User schedule histograms.
-        user_update = {
-            '$inc': {
-                'day.%s' % weekday: nevents,
-                'hour.%02d' % hour: nevents,
-                'month.%04d.%02d' % (year, month): nevents,
-                'event.%s.day.%s' % (evttype, weekday): nevents,
-                'event.%s.hour.%02d' % (evttype, hour): nevents,
-                'event.%s.month.%04d.%02d' % (evttype, year, month): nevents
-            }
-        }
-
+        incs = [
+            'total',
+            'day.%s' % weekday,
+            'hour.%02d' % hour,
+            'month.%04d.%02d' % (year, month),
+            'event.%s.day.%s' % (evttype, weekday),
+            'event.%s.hour.%02d' % (evttype, hour),
+            'event.%s.month.%04d.%02d' % (evttype, year, month)
+        ]
+        for inc in incs:
+            users[key]['$inc'][inc] += nevents
         # Parse the name and owner of the affected repository.
         repo = event.get("repository", {})
         owner, name, org = (repo.get("owner"), repo.get("name"),
                             repo.get("organization"))
         if owner and name:
             repo_name = "{0}/{1}".format(owner, name)
-            pipe.zincrby(_format("repo"), repo_name, nevents)
 
             # Save the social graph.
+            users[key]['repos'][repo_name] += nevents
+            repos[repo_name]['$inc']['total'] += nevents
+            repos[repo_name]['$inc']['events.%s' % evttype] += nevents
+            # redis
             pipe.zincrby(_format("social:user:{0}".format(key)),
                          repo_name, nevents)
             pipe.zincrby(_format("social:repo:{0}".format(repo_name)),
@@ -159,19 +170,43 @@ def events_process(events, year, month, day, hour):
             language = repo.get("language")
             if language:
                 # Which are the most popular languages?
-                pipe.zincrby(_format("lang"), language, nevents)
+                languages[language]['$inc']['total'] += nevents
+                languages[language]['$inc']['events.%s' % evttype] += nevents
 
-                # Total number of pushes.
-                if evttype == "PushEvent":
-                    pipe.zincrby(_format("pushes:lang"), language, nevents)
-
-                user_update['$inc']['lang.%s' % language] = nevents
+                # The most used language of users
+                users[key]['$inc']['lang.%s' % language] += nevents
 
                 # Who are the most important users of a language?
                 if contribution:
                     pipe.zincrby(_format("lang:{0}:user".format(language)),
                                  key, nevents)
-        users_stats.update({'_id': key}, user_update, True)
+    users_stats = db.mongodb().users_stats
+    for key in users:
+        users_stats.update({'_id': key}, {'$inc': users[key]['$inc']}, True)
+        for repo_name in users[key]['repos']:
+            users_stats.update(
+                {'_id': key, 'repos.repo': {'$ne': repo_name}},
+                {'$addToSet': {'repos': {'repo': repo_name, 'events': 0}}},
+                False
+            )
+            users_stats.update(
+                {'_id': key, 'repos.repo': repo_name},
+                {'$inc': {'repos.$.events': users[key]['repos'][repo_name]}},
+                False
+            )
+    del users
+    languages_stats = db.mongodb().languages
+    for key in languages:
+        languages_stats.update({'_id': key},
+                               {'$inc': languages[key]['$inc']},
+                               True)
+    del languages
+    repos_stats = db.mongodb().repositories
+    for key in repos:
+        repos_stats.update({'_id': key},
+                           {'$inc': repos[key]['$inc']},
+                           True)
+    del repos
     pipe.execute()
 
 
@@ -189,7 +224,7 @@ def traverse_all(fn):
                     print "Error during processing %s: %s" % (filename, e)
 
     workers = [gevent.spawn(worker) for i in range(8)]
-    since = datetime(2012, 1, 1)
+    since = datetime(2012, 3, 1)
     while True:
         if since < datetime.today() - timedelta(days=3):
             q.put([since.year, since.month, since.day, since.hour])
