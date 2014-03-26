@@ -172,6 +172,7 @@ def events_process(events, year, month, day, hour):
                 # Which are the most popular languages?
                 languages[language]['$inc']['total'] += nevents
                 languages[language]['$inc']['events.%s' % evttype] += nevents
+                languages[language]['$inc']['month.%d.%2d' % (year, month)] += nevents
 
                 # The most used language of users
                 users[key]['$inc']['lang.%s' % language] += nevents
