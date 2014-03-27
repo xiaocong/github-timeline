@@ -2,10 +2,11 @@
 # -*- coding: utf-8 -*-
 
 # monkey patch
-import gevent
-import gevent.queue
 from gevent import monkey
 monkey.patch_all()
+
+import gevent
+import gevent.queue
 
 import requests
 import os
@@ -26,43 +27,49 @@ def get_github_credential():
     return github_credentials.split(":")
 
 
-def update_user(username):
+def update_user(username, update=False):
     username = username.lower()
-    users = mongodb().users_info
-    user = users.find_one({"_id": username})
-    etag = user.get("etag", None) if user else None
-    location = user.get("location", None) if user else None
-
-    r = None
+    users = mongodb().users_stats
+    if update:
+        user = users.find_one({"_id": username}, {"info": 1})
+    else:
+        user = users.find_one({"_id": username, "info": None})
     successful = True
-    try:
-        # Work out the authentication headers.
-        auth = {}
-        client_id, client_secret = get_github_credential()
-        if client_id is not None and client_secret is not None:
-            auth["client_id"] = client_id
-            auth["client_secret"] = client_secret
+    if user:
+        info = user.get('info', {})
+        etag = info.get("etag", None)
+        location = info.get("location", None)
 
-        # Perform a conditional fetch on the database.
-        headers = {}
-        if etag is not None:
-            headers = {"If-None-Match": etag}
-        r = requests.get(ghapi_url.format(username=username), params=auth,
-                         headers=headers)
-        code = r.status_code
-        if code == requests.codes.ok:
-            data = r.json()
-            data['_id'] = username
-            data['etag'] = r.headers["ETag"]
-            users.update({"_id": username}, data, upsert=True)
-            location = data.get('location', None)
-        elif code == 403:
-            print("*** Limitation reached.")
-            successful = False
-    finally:
-        if r:
-            r.close()
-    update_location(location)
+        r = None
+        try:
+            # Work out the authentication headers.
+            auth = {}
+            client_id, client_secret = get_github_credential()
+            if client_id is not None and client_secret is not None:
+                auth["client_id"] = client_id
+                auth["client_secret"] = client_secret
+
+            # Perform a conditional fetch on the database.
+            headers = {}
+            if etag is not None:
+                headers = {"If-None-Match": etag}
+            r = requests.get(ghapi_url.format(username=username), params=auth,
+                             headers=headers)
+            code = r.status_code
+            if code == requests.codes.ok:
+                data = r.json()
+                data['etag'] = r.headers["ETag"]
+                users.update({"_id": username},
+                             {"$set": {"info": data}},
+                             upsert=True)
+                location = data.get('location', None)
+            elif code == 403:
+                print("*** Limitation reached.")
+                successful = False
+        finally:
+            if r:
+                r.close()
+        update_location(location)
     return successful
 
 
@@ -111,7 +118,7 @@ def worker(q):
         try:
             while not update_user(name):
                 print("Holding thread for 10 minutes.")
-                time.sleep(10*60)
+                time.sleep(10 * 60)
         except:
             pass
 
