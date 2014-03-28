@@ -160,11 +160,7 @@ def events_process(events, year, month, day, hour):
             users[key]['repos'][repo_name] += nevents
             repos[repo_name]['$inc']['total'] += nevents
             repos[repo_name]['$inc']['events.%s' % evttype] += nevents
-            # redis
-            pipe.zincrby(_format("social:user:{0}".format(key)),
-                         repo_name, nevents)
-            pipe.zincrby(_format("social:repo:{0}".format(repo_name)),
-                         key, nevents)
+            repos[repo_name]['$inc']['users.%s' % key] += nevents
 
             # Do we know what the language of the repository is?
             language = repo.get("language")
@@ -213,7 +209,7 @@ def events_process(events, year, month, day, hour):
 
 def traverse_all(fn):
 # def fetch_all(since=datetime(2011, 2, 12)):
-    q = gevent.queue.Queue(32)
+    q = gevent.queue.Queue(8)
 
     def worker():
         for year, month, day, hour in q:
@@ -226,12 +222,9 @@ def traverse_all(fn):
 
     workers = [gevent.spawn(worker) for i in range(8)]
     since = datetime(2012, 3, 1)
-    while True:
-        if since < datetime.today() - timedelta(days=3):
-            q.put([since.year, since.month, since.day, since.hour])
-            since += timedelta(hours=1)
-        else:
-            sleep(3600 * 24)
+    while since < datetime.today() - timedelta(days=3):
+        q.put([since.year, since.month, since.day, since.hour])
+        since += timedelta(hours=1)
 
     for w in workers:
         q.put(StopIteration)
