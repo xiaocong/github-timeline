@@ -9,6 +9,8 @@ import gevent
 import gevent.queue
 
 from db import mongodb
+from db import pipe, redis
+from db import format_key as _format
 
 
 total = 0
@@ -44,5 +46,22 @@ def trans_all():
     print 'All done'
 
 
+def trans_from_redis_to_mongo():
+    r = redis()
+    repositories = mongodb().repositories
+    total = repositories.find().count()
+    print "Total %d repos." % total
+    for repo in repositories.find({}, {'_id': 1}):
+        repo_name = repo['_id']
+        users = dict(
+            r.zrange(_format("social:repo:{0}".format(repo_name)),
+                     0, 100000000, withscores=True)
+        )
+        if users:
+            repositories.update(repo, {'$set': {'users': users}})
+        total -= 1
+        print 'Left %d' % total
+
+
 if __name__ == '__main__':
-    trans_all()
+    trans_from_redis_to_mongo()
