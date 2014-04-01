@@ -116,7 +116,7 @@ def update_location(location):
 def worker(q):
     for name in q:
         try:
-            while not update_user(name):
+            while not update_user(name, True):
                 print("Holding thread for 10 minutes.")
                 time.sleep(10 * 60)
         except:
@@ -124,8 +124,8 @@ def worker(q):
 
 
 def update_users():
-    q = gevent.queue.Queue(40)
-    workers = [gevent.spawn(worker, q) for i in range(10)]
+    q = gevent.queue.Queue(50)
+    workers = [gevent.spawn(worker, q) for i in range(50)]
 
     r = redis()
     total = int(r.zcard(_format("user")))
