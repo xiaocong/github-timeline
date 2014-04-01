@@ -63,5 +63,12 @@ def trans_from_redis_to_mongo():
         print 'Left %d' % total
 
 
+def remove_social():
+    r = redis()
+    p = pipe()
+    for k in r.keys(_format('social:*')):
+        p.delete(k)
+    p.execute()
+
 if __name__ == '__main__':
-    trans_from_redis_to_mongo()
+    remove_social()
