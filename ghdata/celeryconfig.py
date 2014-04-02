@@ -37,7 +37,7 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 
 BROKER_TRANSPORT_OPTIONS = {
-    'visibility_timeout': 3600 * 3
+    'visibility_timeout': 3600 * 24
 }
 
 CELERY_ROUTES = {
@@ -45,5 +45,5 @@ CELERY_ROUTES = {
     'ghdata.tasks.update_location': {'queue': 'geo'},
     'ghdata.tasks.update_all_users': {'queue': 'celery'},
     'ghdata.tasks.fetch_timeline': {'queue': 'celery'},
-    'ghdata.tasks.fetch_worker': {'queue': 'celery'}
+    'ghdata.tasks.fetch_worker': {'queue': 'fetch'}
 }

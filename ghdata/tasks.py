@@ -3,7 +3,7 @@
 
 from __future__ import absolute_import
 
-from .worker import worker as w
+from .worker import worker as w, logger
 
 import gevent
 import gevent.queue
@@ -26,22 +26,23 @@ def concurrency(n):
         @functools.wraps(fn)
         def wrap(*args, **kwargs):
             r = redis()
+            key = _format('func:concurrency:%s' % fn.__name__)
             try:
-                if r.incr(_format('func:%s' % fn.__name__)) > n:
-                    print("No more tasks for %s..." % fn.__name__)
+                if r.incr(key) > n:
+                    logger.info("No more tasks for %s..." % fn.__name__)
                 else:
                     return fn(*args, **kwargs)
             finally:
-                r.decr(_format('func:%s' % fn.__name__))
+                r.decr(key)
         return wrap
     return wrapper
 
 
 @w.task
 def update_user(username):
-    print("Updating %s" % username)
+    logger.info("Updating %s" % username)
     while not _update_user(username):
-        print("Holding github user task for 10 minutes.")
+        logger.info("Holding github user task for 10 minutes.")
         time.sleep(10 * 60)
 
 
@@ -80,7 +81,7 @@ def _update_user(username):
                              upsert=True)
                 location = data.get('location', None)
             elif code == 403:
-                print("*** Limitation reached.")
+                logger.info("*** Limitation reached.")
                 successful = False
         finally:
             if r:
@@ -95,7 +96,7 @@ def update_location(location):
     if location in [None, ""]:
         return
 
-    print("Retrieving location %s" % location)
+    logger.info("Retrieving location %s" % location)
     location = location.lower()
     locations = mongodb().locations
     loc = locations.find_one({"_id": location})
@@ -117,11 +118,11 @@ def update_all_users():
             try:
                 update_user.s(name).delay().get()
             except Exception as e:
-                print(e)
+                logger.error(e)
 
-    q = gevent.queue.Queue(100)
-    workers = [gevent.spawn(_worker, q) for i in range(10)]
     index, count, r = 0, 100, redis()
+    q = gevent.queue.Queue(count)
+    workers = [gevent.spawn(_worker, q) for i in range(count)]
     while True:
         names = r.zrevrange(_format("user"), index, index + count)
         for name in names:
@@ -129,7 +130,7 @@ def update_all_users():
         if len(names) < count:
             break
         index += count
-        print("Done %d." % index)
+        logger.info("Updated %d users." % index)
     for i in range(len(workers)):
         q.put(StopIteration)
     gevent.joinall(workers)
@@ -157,4 +158,4 @@ def fetch_worker(year, month, day, hour):
     try:
         file_process(fetch_one(year, month, day, hour), events_process)
     except Exception as e:
-        print "Error during processing %d-%d-%d %d hr: %s" % (year, month, day, hour, e)
+        logger.error("Error during processing %d-%d-%d %d hr: %s" % (year, month, day, hour, e))

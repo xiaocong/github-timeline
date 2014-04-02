@@ -21,6 +21,7 @@ def _google_geocode(location):
     while True:
         # Submit the request.
         params = {"address": location, "sensor": "false"}
+        r = None
         try:
             r = requests.get(goapi_url, params=params)
             if r.status_code != requests.codes.ok:
@@ -34,7 +35,7 @@ def _google_geocode(location):
         # Try not to go over usage limits.
         status = data.get("status", None)
         if status == "OVER_QUERY_LIMIT":
-            print("Over geo query limit, sleep 1 hour...")
+            logging.info("Over geo query limit, sleep 1 hour...")
             sleep(60 * 60)
             continue
     # Parse the results.
