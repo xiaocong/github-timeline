@@ -1,33 +1,28 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# monkey patch
-from gevent import monkey
-monkey.patch_all()
-
-import gevent
-import gevent.queue
 import os
+import os.path
 import re
 import json
 import requests
 import shutil
 import gzip
 from tempfile import NamedTemporaryFile
-from datetime import datetime, timedelta
-from time import sleep
 import StringIO
 from datetime import date
 from collections import defaultdict
 
-import db
-from db import format_key as _format
+from .db import redis, mongodb, pipe as _pipe, format_key as _format
 
 # The URL template for the GitHub Archive.
 archive_url = ("http://data.githubarchive.org/"
                "{year}-{month:02d}-{day:02d}-{hour}.json.gz")
 local_url = "./data/{year}-{month:02d}-{day:02d}-{hour}.json.gz"
 date_re = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})-([0-9]+)\.json.gz")
+
+# mkdir data directory
+os.path.exists('./data') or os.mkdir('./data')
 
 
 def fetch_one(year, month, day, hour):
@@ -68,27 +63,29 @@ def _gen_json(buf):
         line = buf.readline()
 
 
-def file_process(filename, fn):
-    print('Processing %s with %s' % (filename, fn.__name__))
+def file_process(filename, fns):
     if not filename or not os.path.exists(filename):
         return
+    fns = fns if type(fns) is list else [fns]
     year, month, day, hour = map(int, date_re.findall(filename)[0])
-    r = db.redis()
-    fn_key = _format('function:%s' % fn.__name__)
-    fn_value = "{year}-{month:02d}-{day:02d}-{hour}".format(
-        year=year, month=month, day=day, hour=hour
-    )
-    if r.sismember(fn_key, fn_value):
-        return
+    r = redis()
+    repl = lambda m: ''
+    for fn in fns:
+        print('Processing %s with %s' % (filename, fn.__name__))
+        fn_key = _format('function:%s' % fn.__name__)
+        fn_value = "{year}-{month:02d}-{day:02d}-{hour}".format(
+            year=year, month=month, day=day, hour=hour
+        )
+        if r.sismember(fn_key, fn_value):
+            return
 
-    with gzip.GzipFile(filename) as f:
-        repl = lambda m: ''
-        content = f.read().decode("utf-8", errors="ignore")
-        content = re.sub(u"[^\\}]([\\n\\r\u2028\u2029]+)[^\\{]", repl, content)
-        content = '}\n{"'.join(content.split('}{"'))
-        buf = StringIO.StringIO(content)
-        fn(_gen_json(buf), year, month, day, hour)
-    r.sadd(fn_key, fn_value)
+        with gzip.GzipFile(filename) as f:
+            content = f.read().decode("utf-8", errors="ignore")
+            content = re.sub(u"[^\\}]([\\n\\r\u2028\u2029]+)[^\\{]", repl, content)
+            content = '}\n{"'.join(content.split('}{"'))
+            buf = StringIO.StringIO(content)
+            fn(_gen_json(buf), year, month, day, hour)
+        r.sadd(fn_key, fn_value)
 
 
 def _mongo_default():
@@ -96,9 +93,10 @@ def _mongo_default():
 
 
 def events_process(events, year, month, day, hour):
+    '''main events process method.'''
     weekday = date(year=year, month=month, day=day).strftime("%w")
     year_month = "{year}-{month:02d}".format(year=year, month=month)
-    pipe = db.pipe()
+    pipe = _pipe()
     users = defaultdict(_mongo_default)
     repos = defaultdict(_mongo_default)
     languages = defaultdict(_mongo_default)
@@ -177,7 +175,7 @@ def events_process(events, year, month, day, hour):
                 if contribution:
                     pipe.zincrby(_format("lang:{0}:user".format(language)),
                                  key, nevents)
-    users_stats = db.mongodb().users_stats
+    users_stats = mongodb().users_stats
     for key in users:
         users_stats.update({'_id': key}, {'$inc': users[key]['$inc']}, True)
         for repo_name in users[key]['repos']:
@@ -192,13 +190,13 @@ def events_process(events, year, month, day, hour):
                 False
             )
     del users
-    languages_stats = db.mongodb().languages
+    languages_stats = mongodb().languages
     for key in languages:
         languages_stats.update({'_id': key},
                                {'$inc': languages[key]['$inc']},
                                True)
     del languages
-    repos_stats = db.mongodb().repositories
+    repos_stats = mongodb().repositories
     for key in repos:
         repos_stats.update({'_id': key},
                            {'$inc': repos[key]['$inc']},
@@ -207,28 +205,37 @@ def events_process(events, year, month, day, hour):
     pipe.execute()
 
 
-def traverse_all(fn):
-# def fetch_all(since=datetime(2011, 2, 12)):
-    q = gevent.queue.Queue(8)
+def events_process_lang_contrib(events, year, month, day, hour):
+    '''lang contribution process method.'''
+    users = defaultdict(_mongo_default)
+    for event in events:
+        actor = event["actor"]
+        attrs = event.get("actor_attributes", {})
+        if actor is None or attrs.get("type") != "User":
+            # This was probably an anonymous event (like a gist event)
+            # or an organization event.
+            continue
 
-    def worker():
-        for year, month, day, hour in q:
-            filename = fetch_one(year, month, day, hour)
-            if filename:
-                try:
-                    file_process(filename, fn)
-                except Exception as e:
-                    print "Error during processing %s: %s" % (filename, e)
+        # Normalize the user name.
+        key = actor.lower()
 
-    workers = [gevent.spawn(worker) for i in range(8)]
-    since = datetime(2012, 3, 1)
-    while since < datetime.today() - timedelta(days=3):
-        q.put([since.year, since.month, since.day, since.hour])
-        since += timedelta(hours=1)
+        # Get the type of event.
+        evttype = event["type"]
+        nevents = 1
 
-    for w in workers:
-        q.put(StopIteration)
-    gevent.joinall(workers)
+        # Can this be called a "contribution"?
+        contribution = evttype in ["IssuesEvent", "PullRequestEvent", "PushEvent"]
 
-if __name__ == "__main__":
-    traverse_all(events_process)
+        repo = event.get("repository", {})
+        owner, name, org, language = (repo.get("owner"),
+                                      repo.get("name"),
+                                      repo.get("organization"),
+                                      repo.get("language"))
+        if owner and name and language and contribution:
+            # The most used language of users
+            users[key]['$inc']['contrib.%s.%d.%02d' % (language, year, month)] += nevents
+
+    users_stats = mongodb().users_stats
+    for key in users:
+        users_stats.update({'_id': key}, {'$inc': users[key]['$inc']}, True)
+    del users
