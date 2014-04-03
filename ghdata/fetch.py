@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import os.path
 import re
 import json
 import requests
@@ -19,6 +20,9 @@ archive_url = ("http://data.githubarchive.org/"
                "{year}-{month:02d}-{day:02d}-{hour}.json.gz")
 local_url = "./data/{year}-{month:02d}-{day:02d}-{hour}.json.gz"
 date_re = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})-([0-9]+)\.json.gz")
+
+# mkdir data directory
+os.path.exists('./data') or os.mkdir('./data')
 
 
 def fetch_one(year, month, day, hour):
@@ -59,27 +63,29 @@ def _gen_json(buf):
         line = buf.readline()
 
 
-def file_process(filename, fn):
-    print('Processing %s with %s' % (filename, fn.__name__))
+def file_process(filename, fns):
     if not filename or not os.path.exists(filename):
         return
+    fns = fns if type(fns) is list else [fns]
     year, month, day, hour = map(int, date_re.findall(filename)[0])
     r = redis()
-    fn_key = _format('function:%s' % fn.__name__)
-    fn_value = "{year}-{month:02d}-{day:02d}-{hour}".format(
-        year=year, month=month, day=day, hour=hour
-    )
-    if r.sismember(fn_key, fn_value):
-        return
+    repl = lambda m: ''
+    for fn in fns:
+        print('Processing %s with %s' % (filename, fn.__name__))
+        fn_key = _format('function:%s' % fn.__name__)
+        fn_value = "{year}-{month:02d}-{day:02d}-{hour}".format(
+            year=year, month=month, day=day, hour=hour
+        )
+        if r.sismember(fn_key, fn_value):
+            return
 
-    with gzip.GzipFile(filename) as f:
-        repl = lambda m: ''
-        content = f.read().decode("utf-8", errors="ignore")
-        content = re.sub(u"[^\\}]([\\n\\r\u2028\u2029]+)[^\\{]", repl, content)
-        content = '}\n{"'.join(content.split('}{"'))
-        buf = StringIO.StringIO(content)
-        fn(_gen_json(buf), year, month, day, hour)
-    r.sadd(fn_key, fn_value)
+        with gzip.GzipFile(filename) as f:
+            content = f.read().decode("utf-8", errors="ignore")
+            content = re.sub(u"[^\\}]([\\n\\r\u2028\u2029]+)[^\\{]", repl, content)
+            content = '}\n{"'.join(content.split('}{"'))
+            buf = StringIO.StringIO(content)
+            fn(_gen_json(buf), year, month, day, hour)
+        r.sadd(fn_key, fn_value)
 
 
 def _mongo_default():
@@ -197,3 +203,39 @@ def events_process(events, year, month, day, hour):
                            True)
     del repos
     pipe.execute()
+
+
+def events_process_lang_contrib(events, year, month, day, hour):
+    '''lang contribution process method.'''
+    users = defaultdict(_mongo_default)
+    for event in events:
+        actor = event["actor"]
+        attrs = event.get("actor_attributes", {})
+        if actor is None or attrs.get("type") != "User":
+            # This was probably an anonymous event (like a gist event)
+            # or an organization event.
+            continue
+
+        # Normalize the user name.
+        key = actor.lower()
+
+        # Get the type of event.
+        evttype = event["type"]
+        nevents = 1
+
+        # Can this be called a "contribution"?
+        contribution = evttype in ["IssuesEvent", "PullRequestEvent", "PushEvent"]
+
+        repo = event.get("repository", {})
+        owner, name, org, language = (repo.get("owner"),
+                                      repo.get("name"),
+                                      repo.get("organization"),
+                                      repo.get("language"))
+        if owner and name and language and contribution:
+            # The most used language of users
+            users[key]['$inc']['contrib.%s.%d.%02d' % (language, year, month)] += nevents
+
+    users_stats = mongodb().users_stats
+    for key in users:
+        users_stats.update({'_id': key}, {'$inc': users[key]['$inc']}, True)
+    del users

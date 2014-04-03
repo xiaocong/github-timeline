@@ -33,26 +33,21 @@ def _google_geocode(location):
         data = r.json()
 
         # Try not to go over usage limits.
-        status = data.get("status", None)
-        if status == "OVER_QUERY_LIMIT":
+        if data.get("status", None) == "OVER_QUERY_LIMIT":
             logging.info("Over geo query limit, sleep 1 hour...")
             sleep(60 * 60)
             continue
-    # Parse the results.
-    results = data.get("results", [])
-    if not len(results):
-        return None
+        # Parse the results.
+        results = data.get("results", [])
+        if not len(results):
+            return None
 
-    # Find the coordinates.
-    info = {"loc": results[0].get("geometry", {}).get("location", None)}
-    for addr in results[0].get("address_components", []):
-        for type in ["sublocality",
-                     "locality",
-                     "administrative_area_level_1",
-                     "country"]:
-            if type in addr.get("types", []):
-                info[type] = addr
-    return info
+        # update geo info
+        types = ["sublocality", "locality", "administrative_area_level_1", "country"]
+        info = {"loc": results[0].get("geometry", {}).get("location", None)}
+        for addr in results[0].get("address_components", []):
+            info.update({type: addr for type in types if type in addr.get("types", [])})
+        return info
 
 
 def geocode(location):
