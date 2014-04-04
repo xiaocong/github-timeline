@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timedelta
 import functools
 from collections import defaultdict
+from translate import Translator
 
 from .config import GITHUB_CRENDENTIALS
 from .db import mongodb, redis, format_key as _format
@@ -183,6 +184,7 @@ def country_rank():
                 countries[country] = default()
                 countries[country]['users'] = 0
                 countries[country]['contrib'] = defaultdict(default)
+                countries[country]['display'] = {'en': country}
             countries[country]['users'] += 1
             for year in user.get('month', {}):
                 for month in user['month'][year]:
@@ -196,6 +198,12 @@ def country_rank():
                         cont[lang]['month'][year][month] += user['contrib'][lang][year][month]
                         cont[lang]['year'][year] += user['contrib'][lang][year][month]
                         cont[lang]['total'] += user['contrib'][lang][year][month]
+    results = {country: translate.delay(country, from_lang='en', to_lang='zh') for country in countries}
+    for country, result in results.items():
+        try:
+            countries[country]['display']['zh'] = result.get()
+        except:
+            logger.error("Error during translating %s." % country)
     stats = mongodb().country_stats
     for country in countries:
         stats.update({'_id': country}, {'$set': countries[country]}, True)
@@ -226,6 +234,7 @@ def city_rank():
                 localities[city]['contrib'] = defaultdict(default)
                 localities[city]['country'] = country
                 localities[city]['state'] = state
+                localities[city]['display'] = {'en': city}
             localities[city]['users'] += 1
             for year in user.get('month', {}):
                 for month in user['month'][year]:
@@ -239,6 +248,17 @@ def city_rank():
                         cont[lang]['month'][year][month] += user['contrib'][lang][year][month]
                         cont[lang]['year'][year] += user['contrib'][lang][year][month]
                         cont[lang]['total'] += user['contrib'][lang][year][month]
+    results = {city: translate.delay(city, from_lang='en', to_lang='zh') for city in localities}
+    for city, result in results.items():
+        try:
+            localities[city]['display']['zh'] = result.get()
+        except:
+            logger.error("Error during translating %s." % city)
     stats = mongodb().city_stats
     for city, value in localities.items():
         stats.update({'_id': city}, {'$set': value}, True)
+
+
+@w.task
+def translate(text, from_lang='en', to_lang='zh'):
+    return Translator(to_lang=to_lang, from_lang=from_lang).translate(text.encode('utf8'))

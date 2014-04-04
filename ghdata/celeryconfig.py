@@ -57,6 +57,7 @@ CELERY_ROUTES = {
     'ghdata.tasks.fetch_worker': {'queue': 'fetch'},
     'ghdata.tasks.country_rank': {'queue': 'stats'},
     'ghdata.tasks.city_rank': {'queue': 'stats'},
+    'ghdata.tasks.translate': {'queue': 'stats'},
     'ghdata.tasks.update_all_users': {'queue': 'celery'},
     'ghdata.tasks.fetch_timeline': {'queue': 'celery'}
 }
