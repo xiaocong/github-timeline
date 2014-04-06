@@ -171,34 +171,29 @@ def fetch_worker(year, month, day, hour):
 @concurrency(1)
 def country_rank():
     '''Activities per country and month.'''
-    locs = {}
-    for location in mongodb().locations.find({'country': {'$ne': None}}, {'_id': 1, 'country': 1}):
-        locs[location['_id']] = location['country']['long_name']
-    countries = {}
     default = lambda: {'year': defaultdict(int), 'month': defaultdict(lambda: defaultdict(int)), 'total': 0}
-    for user in mongodb().users_stats.find({'info.location': {'$ne': None}},
-                                           {'month': 1, 'info.location': 1, 'contrib': 1}):
-        country = locs.get(user['info']['location'].lower(), None)
-        if country:
-            if country not in countries:
-                countries[country] = default()
-                countries[country]['users'] = 0
-                countries[country]['contrib'] = defaultdict(default)
-                countries[country]['display'] = {'en': country}
-            countries[country]['users'] += 1
-            for year in user.get('month', {}):
-                for month in user['month'][year]:
-                    countries[country]['month'][year][month] += user['month'][year][month]
-                    countries[country]['year'][year] += user['month'][year][month]
-                    countries[country]['total'] += user['month'][year][month]
-            cont = countries[country]['contrib']
-            for lang in user.get('contrib', {}):
-                for year in user['contrib'][lang]:
-                    for month in user['contrib'][lang][year]:
-                        cont[lang]['month'][year][month] += user['contrib'][lang][year][month]
-                        cont[lang]['year'][year] += user['contrib'][lang][year][month]
-                        cont[lang]['total'] += user['contrib'][lang][year][month]
-    results = {country: translate.delay(country, from_lang='en', to_lang='zh') for country in countries}
+    countries = defaultdict(default)
+    for user in mongodb().users_stats.find({'loc.country': {'$ne': None}},
+                                           {'month': 1, 'loc.country': 1, 'contrib': 1}):
+        country = user['loc']['country']
+        if country not in countries:
+            countries[country]['users'] = 0
+            countries[country]['contrib'] = defaultdict(default)
+            countries[country]['display'] = {'en': country}
+        countries[country]['users'] += 1
+        for year in user.get('month', {}):
+            for month in user['month'][year]:
+                countries[country]['month'][year][month] += user['month'][year][month]
+                countries[country]['year'][year] += user['month'][year][month]
+                countries[country]['total'] += user['month'][year][month]
+        cont = countries[country]['contrib']
+        for lang in user.get('contrib', {}):
+            for year in user['contrib'][lang]:
+                for month in user['contrib'][lang][year]:
+                    cont[lang]['month'][year][month] += user['contrib'][lang][year][month]
+                    cont[lang]['year'][year] += user['contrib'][lang][year][month]
+                    cont[lang]['total'] += user['contrib'][lang][year][month]
+    results = {country: translate.delay(country, to_lang='zh') for country in countries}
     for country, result in results.items():
         try:
             countries[country]['display']['zh'] = result.get()
@@ -213,42 +208,32 @@ def country_rank():
 @concurrency(1)
 def city_rank():
     '''Activities per city and month.'''
-    locs, countries = {}, {}
-    for location in mongodb().locations.find({'locality.long_name': {'$ne': None}},
-                                             {'_id': 1,
-                                              'locality.long_name': 1,
-                                              'country.long_name': 1,
-                                              'administrative_area_level_1.long_name': 1}):
-        locs[location['_id']] = (location.get('country', {}).get('long_name'),
-                                 location.get('administrative_area_level_1', {}).get('long_name'),
-                                 location['locality']['long_name'])
     localities = {}
     default = lambda: {'year': defaultdict(int), 'month': defaultdict(lambda: defaultdict(int)), 'total': 0}
-    for user in mongodb().users_stats.find({'info.location': {'$ne': None}},
-                                           {'month': 1, 'info.location': 1, 'contrib': 1}):
-        country, state, city = locs.get(user['info']['location'].lower(), (None, None, None))
-        if city:
-            if city not in localities:
-                localities[city] = default()
-                localities[city]['users'] = 0
-                localities[city]['contrib'] = defaultdict(default)
-                localities[city]['country'] = country
-                localities[city]['state'] = state
-                localities[city]['display'] = {'en': city}
-            localities[city]['users'] += 1
-            for year in user.get('month', {}):
-                for month in user['month'][year]:
-                    localities[city]['month'][year][month] += user['month'][year][month]
-                    localities[city]['year'][year] += user['month'][year][month]
-                    localities[city]['total'] += user['month'][year][month]
-            cont = localities[city]['contrib']
-            for lang in user.get('contrib', {}):
-                for year in user['contrib'][lang]:
-                    for month in user['contrib'][lang][year]:
-                        cont[lang]['month'][year][month] += user['contrib'][lang][year][month]
-                        cont[lang]['year'][year] += user['contrib'][lang][year][month]
-                        cont[lang]['total'] += user['contrib'][lang][year][month]
-    results = {city: translate.delay(city, from_lang='en', to_lang='zh') for city in localities}
+    for user in mongodb().users_stats.find({'loc.city': {'$ne': None}},
+                                           {'month': 1, 'loc': 1, 'contrib': 1}):
+        country, state, city = [user['loc'].get(t, None) for t in ['country', 'state', 'city']]
+        if city not in localities:
+            localities[city] = default()
+            localities[city]['users'] = 0
+            localities[city]['contrib'] = defaultdict(default)
+            localities[city]['country'] = country
+            localities[city]['state'] = state
+            localities[city]['display'] = {'en': city}
+        localities[city]['users'] += 1
+        for year in user.get('month', {}):
+            for month in user['month'][year]:
+                localities[city]['month'][year][month] += user['month'][year][month]
+                localities[city]['year'][year] += user['month'][year][month]
+                localities[city]['total'] += user['month'][year][month]
+        cont = localities[city]['contrib']
+        for lang in user.get('contrib', {}):
+            for year in user['contrib'][lang]:
+                for month in user['contrib'][lang][year]:
+                    cont[lang]['month'][year][month] += user['contrib'][lang][year][month]
+                    cont[lang]['year'][year] += user['contrib'][lang][year][month]
+                    cont[lang]['total'] += user['contrib'][lang][year][month]
+    results = {city: translate.delay(city, to_lang='zh') for city in localities}
     for city, result in results.items():
         try:
             localities[city]['display']['zh'] = result.get()
@@ -260,5 +245,44 @@ def city_rank():
 
 
 @w.task
-def translate(text, from_lang='en', to_lang='zh'):
-    return Translator(to_lang=to_lang, from_lang=from_lang).translate(text.encode('utf8'))
+def translate(text, to_lang='zh'):
+    translation = mongodb().translation
+    t = translation.find_one({'_id': text, to_lang: {'$ne': None}}, {to_lang: 1})
+    result = t and t[to_lang]
+    if not result:
+        result = Translator(to_lang=to_lang, from_lang='en').translate(text.encode('utf8'))
+        translation.update({'_id': text}, {'$set': {to_lang: result}}, True)
+    return result
+
+
+@w.task
+@concurrency(1)
+def update_user_location():
+    locs = {}
+    for location in mongodb().locations.find({},
+                                             {'locality.long_name': 1,
+                                              'country.long_name': 1,
+                                              'administrative_area_level_1.long_name': 1
+                                              }):
+        locs[location['_id']] = {
+            'country': location.get('country', {}).get('long_name', None),
+            'state': location.get('administrative_area_level_1', {}).get('long_name', None),
+            'city': location.get('locality', {}).get('long_name', None)
+        }
+    users_stats = mongodb().users_stats
+    for user in users_stats.find({'info.location': {'$ne': None}, 'loc': None}):
+        location = user['info']['location'].lower()
+        if location in locs:
+            users_stats.update({'_id': user['_id']}, {'$set': {'loc': locs[location]}})
+    country_rank.delay().get()
+    city_rank.delay().get()
+
+
+# @w.task
+# def lang_rank(lang, year=None):
+#     year = year or datetime.now().year
+#     key = 'contrib.%s.%d' % (lang, year)
+#     users = {}
+#     for user in mongodb().users_stats.find({key: {'$ne': None}}, {key: 1}):
+#         data = user['contrib'][lang]['%d' % year]
+#         users[user['_id']] = sum([data[month] for month in data])
