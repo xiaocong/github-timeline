@@ -31,13 +31,9 @@ CELERYBEAT_SCHEDULE = {
         # 'schedule': timedelta(minutes=1)
         'schedule': crontab(hour=20, minute=0)
     },
-    'country-rank': {
-        'task': 'ghdata.tasks.country_rank',
-        'schedule': crontab(day_of_month=2, hour=0, minute=0)
-    },
-    'city-rank': {
-        'task': 'ghdata.tasks.city_rank',
-        'schedule': crontab(day_of_month=2, hour=2, minute=0)
+    'update_user_location': {
+        'task': 'ghdata.tasks.update_user_location',
+        'schedule': crontab(hour=0, minute=0)
     }
 }
 
