@@ -78,16 +78,14 @@ def file_process(filename, fns):
         fn_value = "{year}-{month:02d}-{day:02d}-{hour}".format(
             year=year, month=month, day=day, hour=hour
         )
-        if r.sismember(fn_key, fn_value):
-            return
-
-        with gzip.GzipFile(filename) as f:
-            content = f.read().decode("utf-8", errors="ignore")
-            content = re.sub(u"[^\\}]([\\n\\r\u2028\u2029]+)[^\\{]", repl, content)
-            content = '}\n{"'.join(content.split('}{"'))
-            buf = StringIO.StringIO(content)
-            fn(_gen_json(buf), year, month, day, hour)
-        r.sadd(fn_key, fn_value)
+        if not r.sismember(fn_key, fn_value):
+            with gzip.GzipFile(filename) as f:
+                content = f.read().decode("utf-8", errors="ignore")
+                content = re.sub(u"[^\\}]([\\n\\r\u2028\u2029]+)[^\\{]", repl, content)
+                content = '}\n{"'.join(content.split('}{"'))
+                buf = StringIO.StringIO(content)
+                fn(_gen_json(buf), year, month, day, hour)
+            r.sadd(fn_key, fn_value)
 
 
 def _mongo_default():
