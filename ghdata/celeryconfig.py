@@ -44,7 +44,7 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 
 BROKER_TRANSPORT_OPTIONS = {
-    'visibility_timeout': 3600 * 24
+    'visibility_timeout': 3600
 }
 
 CELERY_ROUTES = {

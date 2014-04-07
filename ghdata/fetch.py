@@ -47,6 +47,8 @@ def fetch_one(year, month, day, hour):
                 return local_fn
             else:
                 print("Fetching %s failed." % url)
+        except:
+            return None
         finally:
             if r is not None:
                 r.close()

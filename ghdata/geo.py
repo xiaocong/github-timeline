@@ -26,6 +26,9 @@ def _google_geocode(location):
             r = requests.get(goapi_url, params=params)
             if r.status_code != requests.codes.ok:
                 return None
+        except:
+            logging.info("Error during retrieving geo info.")
+            return None
         finally:
             if r:
                 r.close()
