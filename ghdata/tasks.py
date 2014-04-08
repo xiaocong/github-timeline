@@ -147,7 +147,10 @@ def fetch_timeline(year=2012, month=3, day=1, threads=4):
     def _worker(q):
         # worker process.
         for year, month, day, hour in q:
-            fetch_worker.s(year, month, day, hour).delay().get()
+            try:
+                fetch_worker.delay(year, month, day, hour).get()
+            except:
+                logger.error('Error during fetching %d-%d-%d %d.' % (year, month, day, hour))
     q = gevent.queue.Queue(8)
     workers = [gevent.spawn(_worker, q) for i in range(threads)]
     since = datetime(year, month, day)
@@ -158,7 +161,7 @@ def fetch_timeline(year=2012, month=3, day=1, threads=4):
     gevent.joinall(workers)
 
 
-@w.task
+@w.task(time_limit=3600*4)
 def fetch_worker(year, month, day, hour):
     '''fetch one hour's timeline data and save it to db.'''
     try:
@@ -167,7 +170,7 @@ def fetch_worker(year, month, day, hour):
         logger.error("Error during processing %d-%d-%d %d hr: %s" % (year, month, day, hour, e))
 
 
-@w.task
+@w.task(time_limit=3600*4)
 @concurrency(1)
 def country_rank():
     '''Activities per country and month.'''
@@ -204,7 +207,7 @@ def country_rank():
         stats.update({'_id': country}, {'$set': countries[country]}, True)
 
 
-@w.task
+@w.task(time_limit=3600*12)
 @concurrency(1)
 def city_rank():
     '''Activities per city and month.'''
@@ -274,8 +277,14 @@ def update_user_location():
         location = user['info']['location'].lower()
         if location in locs:
             users_stats.update({'_id': user['_id']}, {'$set': {'loc': locs[location]}})
-    country_rank.delay().get()
-    city_rank.delay().get()
+    try:
+        country_rank.delay().get()
+    except:
+        logger.error('Error during ranking country.')
+    try:
+        city_rank.delay().get()
+    except:
+        logger.error('Error during ranking city.')
 
 
 # @w.task
