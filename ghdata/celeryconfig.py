@@ -11,7 +11,7 @@ CELERY_INCLUDE = ['ghdata.tasks']
 BROKER_URL = config.REDIS_URI
 # Task Result backend
 CELERY_RESULT_BACKEND = config.REDIS_URI
-CELERY_TASK_RESULT_EXPIRES = 60
+CELERY_TASK_RESULT_EXPIRES = 60*60*24
 
 # pool and threads
 # CELERYD_POOL = "gevent"

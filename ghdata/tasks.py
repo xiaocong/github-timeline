@@ -170,7 +170,7 @@ def fetch_worker(year, month, day, hour):
         logger.error("Error during processing %d-%d-%d %d hr: %s" % (year, month, day, hour, e))
 
 
-@w.task(time_limit=3600*4)
+@w.task(time_limit=3600*8)
 @concurrency(1)
 def country_rank():
     '''Activities per country and month.'''
@@ -207,7 +207,7 @@ def country_rank():
         stats.update({'_id': country}, {'$set': countries[country]}, True)
 
 
-@w.task(time_limit=3600*12)
+@w.task(time_limit=3600*8)
 @concurrency(1)
 def city_rank():
     '''Activities per city and month.'''
