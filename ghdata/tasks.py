@@ -179,6 +179,8 @@ def country_rank():
     for user in mongodb().users_stats.find({'loc.country': {'$ne': None}},
                                            {'month': 1, 'loc.country': 1, 'contrib': 1}):
         country = user['loc']['country']
+        if not country:
+            continue
         if country not in countries:
             countries[country]['users'] = 0
             countries[country]['contrib'] = defaultdict(default)
@@ -216,6 +218,8 @@ def city_rank():
     for user in mongodb().users_stats.find({'loc.city': {'$ne': None}},
                                            {'month': 1, 'loc': 1, 'contrib': 1}):
         country, state, city = [user['loc'].get(t, None) for t in ['country', 'state', 'city']]
+        if not city:
+            continue
         if city not in localities:
             localities[city] = default()
             localities[city]['users'] = 0
