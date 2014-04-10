@@ -11,7 +11,7 @@ CELERY_INCLUDE = ['ghdata.tasks']
 BROKER_URL = config.REDIS_URI
 # Task Result backend
 CELERY_RESULT_BACKEND = config.REDIS_URI
-CELERY_TASK_RESULT_EXPIRES = 60*60*24
+CELERY_TASK_RESULT_EXPIRES = 60*60*24*10
 
 # pool and threads
 # CELERYD_POOL = "gevent"
@@ -27,12 +27,12 @@ CELERYBEAT_SCHEDULE = {
     },
     'fetch-timeline-data': {
         'task': 'ghdata.tasks.fetch_timeline',
-        'args': (2012, 3, 1, 8),
+        'args': (2012, 3, 1),
         # 'schedule': timedelta(minutes=1)
         'schedule': crontab(hour=20, minute=0)
     },
-    'update_user_location': {
-        'task': 'ghdata.tasks.update_user_location',
+    'rank': {
+        'task': 'ghdata.tasks.rank',
         'schedule': crontab(hour=0, minute=0)
     }
 }
@@ -53,7 +53,8 @@ CELERY_ROUTES = {
     'ghdata.tasks.fetch_worker': {'queue': 'fetch'},
     'ghdata.tasks.country_rank': {'queue': 'stats'},
     'ghdata.tasks.city_rank': {'queue': 'stats'},
-    'ghdata.tasks.update_user_location': {'queue': 'stats'},
+    'ghdata.tasks.update_users_location': {'queue': 'stats'},
+    'ghdata.tasks.rank': {'queue': 'stats'},
     'ghdata.tasks.translate': {'queue': 'stats'},
     'ghdata.tasks.update_all_users': {'queue': 'celery'},
     'ghdata.tasks.fetch_timeline': {'queue': 'celery'}

@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import functools
 from collections import defaultdict
 from translate import Translator
+from celery import group
 
 from .config import GITHUB_CRENDENTIALS
 from .db import mongodb, redis, format_key as _format
@@ -57,7 +58,6 @@ def _update_user(username):
     users = mongodb().users_stats
     user = users.find_one({"_id": username}, {"info": 1})
 
-    successful = True
     info = user.get('info', {}) if user else {}
     etag = info.get("etag", None)
     location = info.get("location", None)
@@ -85,20 +85,18 @@ def _update_user(username):
             location = data.get('location', None)
         elif code == 403:
             logger.info("*** Limitation reached.")
-            successful = False
+            return False
     except:
         pass
     finally:
         if r:
             r.close()
-    if location not in [None, ""]:
-        if not mongodb().locations.find_one({"_id": location.lower()}):
-            update_location.delay(location)
-    return successful
+    update_location.delay(location, username)
+    return True
 
 
 @w.task
-def update_location(location):
+def update_location(location, username=None):
     '''get location data(contry, city...) from location name'''
     if location in [None, ""]:
         return
@@ -106,11 +104,21 @@ def update_location(location):
     logger.info("Retrieving location %s" % location)
     location = location.lower()
     locations = mongodb().locations
-    if locations.find_one({"_id": location}):
-        return  # return if the loc is already in the db
-    loc = {"_id": location}
-    loc.update(geo_info(location) or {})
-    locations.update({"_id": location}, loc, True)
+
+    loc = locations.find_one({"_id": location})
+    if not loc:
+        loc = {"_id": location}
+        loc.update(geo_info(location) or {})
+        locations.update({"_id": location}, loc, True)
+    if username:
+        username = username.lower()
+        loc_info = {
+            'country': loc.get('country', {}).get('long_name', None),
+            'state': loc.get('administrative_area_level_1', {}).get('long_name', None),
+            'city': loc.get('locality', {}).get('long_name', None),
+            'timezone': loc.get('timezone', 0)
+        }
+        mongodb().users_stats.update({'_id': username}, {'$set': {'loc': loc_info}})
 
 
 @w.task(ignore_result=True)
@@ -137,28 +145,18 @@ def update_all_users():
         logger.info("Updated %d users." % index)
     for i in range(len(workers)):
         q.put(StopIteration)
-    gevent.joinall(workers)
+    gevent.joinall(workers, timeout=4000)
 
 
 @w.task(ignore_result=True)
 @concurrency(1)
-def fetch_timeline(year=2012, month=3, day=1, threads=4):
+def fetch_timeline(year=2012, month=3, day=1):
     '''worker process to go through all timeline data since 2012/3/1.'''
-    def _worker(q):
-        # worker process.
-        for year, month, day, hour in q:
-            try:
-                fetch_worker.delay(year, month, day, hour).get()
-            except:
-                logger.error('Error during fetching %d-%d-%d %d.' % (year, month, day, hour))
-    q = gevent.queue.Queue(8)
-    workers = [gevent.spawn(_worker, q) for i in range(threads)]
     since = datetime(year, month, day)
-    while since < datetime.today() - timedelta(days=1):
-        q.put([since.year, since.month, since.day, since.hour])
-        since += timedelta(hours=1)
-    [q.put(StopIteration) for w in workers]
-    gevent.joinall(workers)
+    hours = int((datetime.today() - since).total_seconds()/3600)
+    times = (since + timedelta(hours=i) for i in range(hours))
+    res = group(fetch_worker.s(h.year, h.month, h.day, h.hour) for h in times)()
+    res.get()
 
 
 @w.task(time_limit=3600*4)
@@ -176,6 +174,7 @@ def country_rank():
     '''Activities per country and month.'''
     default = lambda: {'year': defaultdict(int), 'month': defaultdict(lambda: defaultdict(int)), 'total': 0}
     countries = defaultdict(default)
+    trans = {}
     for user in mongodb().users_stats.find({'loc.country': {'$ne': None}},
                                            {'month': 1, 'loc.country': 1, 'contrib': 1}):
         country = user['loc']['country']
@@ -185,6 +184,7 @@ def country_rank():
             countries[country]['users'] = 0
             countries[country]['contrib'] = defaultdict(default)
             countries[country]['display'] = {'en': country}
+            trans[country] = translate.delay(country, to_lang='zh')
         countries[country]['users'] += 1
         for year in user.get('month', {}):
             for month in user['month'][year]:
@@ -198,22 +198,20 @@ def country_rank():
                     cont[lang]['month'][year][month] += user['contrib'][lang][year][month]
                     cont[lang]['year'][year] += user['contrib'][lang][year][month]
                     cont[lang]['total'] += user['contrib'][lang][year][month]
-    results = {country: translate.delay(country, to_lang='zh') for country in countries}
-    for country, result in results.items():
+    stats = mongodb().country_stats
+    for country, value in countries.items():
         try:
-            countries[country]['display']['zh'] = result.get()
+            value['display']['zh'] = trans[country].get() or country
         except:
             logger.error("Error during translating %s." % country)
-    stats = mongodb().country_stats
-    for country in countries:
-        stats.update({'_id': country}, {'$set': countries[country]}, True)
+        stats.update({'_id': country}, {'$set': value}, True)
 
 
 @w.task(time_limit=3600*8)
 @concurrency(1)
 def city_rank():
     '''Activities per city and month.'''
-    localities = {}
+    localities, trans = {}, {}
     default = lambda: {'year': defaultdict(int), 'month': defaultdict(lambda: defaultdict(int)), 'total': 0}
     for user in mongodb().users_stats.find({'loc.city': {'$ne': None}},
                                            {'month': 1, 'loc': 1, 'contrib': 1}):
@@ -227,6 +225,7 @@ def city_rank():
             localities[city]['country'] = country
             localities[city]['state'] = state
             localities[city]['display'] = {'en': city}
+            trans[city] = translate.delay(city, to_lang='zh')
         localities[city]['users'] += 1
         for year in user.get('month', {}):
             for month in user['month'][year]:
@@ -240,14 +239,12 @@ def city_rank():
                     cont[lang]['month'][year][month] += user['contrib'][lang][year][month]
                     cont[lang]['year'][year] += user['contrib'][lang][year][month]
                     cont[lang]['total'] += user['contrib'][lang][year][month]
-    results = {city: translate.delay(city, to_lang='zh') for city in localities}
-    for city, result in results.items():
-        try:
-            localities[city]['display']['zh'] = result.get()
-        except:
-            logger.error("Error during translating %s." % city)
     stats = mongodb().city_stats
     for city, value in localities.items():
+        try:
+            value['display']['zh'] = trans[city].get() or city
+        except:
+            logger.error("Error during translating %s." % city)
         stats.update({'_id': city}, {'$set': value}, True)
 
 
@@ -257,38 +254,40 @@ def translate(text, to_lang='zh'):
     t = translation.find_one({'_id': text, to_lang: {'$ne': None}}, {to_lang: 1})
     result = t and t[to_lang]
     if not result:
-        result = Translator(to_lang=to_lang, from_lang='en').translate(text.encode('utf8'))
-        translation.update({'_id': text}, {'$set': {to_lang: result}}, True)
+        try:
+            result = Translator(to_lang=to_lang, from_lang='en').translate(text.encode('utf8'))
+            translation.update({'_id': text}, {'$set': {to_lang: result}}, True)
+        except:
+            result = None
     return result
 
 
 @w.task
 @concurrency(1)
-def update_user_location():
+def update_users_location():
     locs = {}
     for location in mongodb().locations.find({},
                                              {'locality.long_name': 1,
                                               'country.long_name': 1,
-                                              'administrative_area_level_1.long_name': 1
+                                              'administrative_area_level_1.long_name': 1,
+                                              'timezone': 1
                                               }):
         locs[location['_id']] = {
             'country': location.get('country', {}).get('long_name', None),
             'state': location.get('administrative_area_level_1', {}).get('long_name', None),
-            'city': location.get('locality', {}).get('long_name', None)
+            'city': location.get('locality', {}).get('long_name', None),
+            'timezone': location.get('timezone', 0)
         }
     users_stats = mongodb().users_stats
-    for user in users_stats.find({'info.location': {'$ne': None}, 'loc': None}):
+    for user in users_stats.find({'info.location': {'$ne': None}}):
         location = user['info']['location'].lower()
         if location in locs:
             users_stats.update({'_id': user['_id']}, {'$set': {'loc': locs[location]}})
-    try:
-        country_rank.delay().get()
-    except:
-        logger.error('Error during ranking country.')
-    try:
-        city_rank.delay().get()
-    except:
-        logger.error('Error during ranking city.')
+
+
+@w.task
+def rank():
+    (country_rank.si() | city_rank.si())()
 
 
 # @w.task
