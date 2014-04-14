@@ -128,7 +128,7 @@ def update_all_users():
     def _worker(q):
         for name in q:
             try:
-                update_user.s(name).delay().get()
+                update_user.delay(name).get(3600*2)
             except Exception as e:
                 logger.error(e)
 
@@ -136,13 +136,17 @@ def update_all_users():
     q = gevent.queue.Queue(count)
     workers = [gevent.spawn(_worker, q) for i in range(count)]
     while True:
-        names = r.zrevrange(_format("user"), index, index + count)
-        for name in names:
-            q.put(name)
-        if len(names) < count:
+        try:
+            names = r.zrevrange(_format("user"), index, index + count)
+            for name in names:
+                q.put(name)
+            if len(names) < count:
+                break
+            index += count
+            logger.info("Updated %d users." % index)
+        except Exception as e:
+            logger.error(e)
             break
-        index += count
-        logger.info("Updated %d users." % index)
     for i in range(len(workers)):
         q.put(StopIteration)
     gevent.joinall(workers, timeout=4000)
@@ -155,8 +159,7 @@ def fetch_timeline(year=2012, month=3, day=1):
     since = datetime(year, month, day)
     hours = int((datetime.today() - since).total_seconds()/3600)
     times = (since + timedelta(hours=i) for i in range(hours))
-    res = group(fetch_worker.s(h.year, h.month, h.day, h.hour) for h in times)()
-    res.get()
+    group(fetch_worker.s(h.year, h.month, h.day, h.hour) for h in times)()
 
 
 @w.task(time_limit=3600*4)
