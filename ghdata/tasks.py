@@ -11,6 +11,7 @@ import requests
 import time
 from datetime import datetime, timedelta
 import functools
+import math
 from collections import defaultdict
 from translate import Translator
 from celery import group
@@ -162,7 +163,7 @@ def fetch_timeline(year=2012, month=3, day=1):
     group(fetch_worker.s(h.year, h.month, h.day, h.hour) for h in times)()
 
 
-@w.task(time_limit=3600*4)
+@w.task(time_limit=3600 * 4)
 def fetch_worker(year, month, day, hour):
     '''fetch one hour's timeline data and save it to db.'''
     try:
@@ -171,7 +172,7 @@ def fetch_worker(year, month, day, hour):
         logger.error("Error during processing %d-%d-%d %d hr: %s" % (year, month, day, hour, e))
 
 
-@w.task(time_limit=3600*8)
+@w.task(time_limit=3600 * 8)
 @concurrency(1)
 def country_rank():
     '''Activities per country and month.'''
@@ -210,7 +211,7 @@ def country_rank():
         stats.update({'_id': country}, {'$set': value}, True)
 
 
-@w.task(time_limit=3600*8)
+@w.task(time_limit=3600 * 8)
 @concurrency(1)
 def city_rank():
     '''Activities per city and month.'''
@@ -293,11 +294,22 @@ def rank():
     (country_rank.si() | city_rank.si())()
 
 
-# @w.task
-# def lang_rank(lang, year=None):
-#     year = year or datetime.now().year
-#     key = 'contrib.%s.%d' % (lang, year)
-#     users = {}
-#     for user in mongodb().users_stats.find({key: {'$ne': None}}, {key: 1}):
-#         data = user['contrib'][lang]['%d' % year]
-#         users[user['_id']] = sum([data[month] for month in data])
+@w.task
+def user_rank(lang, country='China', months=24):
+    now = datetime.now()
+    year, month = now.year - int(math.ceil((months - now.month + 1) / 12.)), (now.month - months - 1) % 12 + 1
+
+    pipe = redis().pipeline()
+    t_key = _format(str(time.time()))
+    key = 'contrib.%s' % lang
+    for i, user in enumerate(mongodb().users_stats.find({key: {'$ne': None}, 'loc.country': country},
+                                                        {key: 1, 'loc': 1})):
+        print user['_id']
+        cont = user['contrib'][lang]
+        v = sum(cont[y][m] for y in cont for m in cont[y] if (int(y) > year or (int(y) == year and int(m) >= month)))
+        pipe.zadd(t_key, user['_id'], v)
+        i % 1000 or pipe.execute()
+    r_key = _format("country:{0}.lang:{1}:user".format(country, lang))
+    pipe.delete(r_key)
+    pipe.rename(t_key, r_key)
+    pipe.execute()
