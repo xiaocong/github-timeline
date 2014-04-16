@@ -5,8 +5,6 @@ from __future__ import absolute_import
 
 from .worker import worker as w, logger
 
-import gevent
-import gevent.queue
 import requests
 import time
 from datetime import datetime, timedelta
@@ -45,13 +43,21 @@ def concurrency(n):
     return wrapper
 
 
-@w.task
-def update_user(username):
+@w.task(ignore_result=True)
+def update_user(index, step):
     '''update user's info from github'''
-    logger.info("Updating %s" % username)
-    while not _update_user(username):
-        logger.info("Holding github user task for 10 minutes.")
-        time.sleep(10 * 60)
+    r = redis()
+    users = r.zrevrange(_format("user"), index, index)
+    if len(users) > 0:
+        logger.info("Updating %s at %d." % (users[0], index))
+        index = 0
+        while not _update_user(users[0]) and index < 6:
+            logger.info("Holding github user task for 10 minutes.")
+            time.sleep(10 * 60)
+            index += 1
+        update_user.delay(index + step, step)
+    else:
+        r.srem(_format('update:users:index'), index % step)
 
 
 def _update_user(username):
@@ -96,7 +102,7 @@ def _update_user(username):
     return True
 
 
-@w.task
+@w.task(ignore_result=True)
 def update_location(location, username=None):
     '''get location data(contry, city...) from location name'''
     if location in [None, ""]:
@@ -123,34 +129,12 @@ def update_location(location, username=None):
 
 
 @w.task(ignore_result=True)
-@concurrency(1)
-def update_all_users():
+def update_all_users(step=30):
     '''Traverse all users and retrieve its info from github.'''
-    def _worker(q):
-        for name in q:
-            try:
-                update_user.delay(name).get(3600*2)
-            except Exception as e:
-                logger.error(e)
-
-    index, count, r = 0, 100, redis()
-    q = gevent.queue.Queue(count)
-    workers = [gevent.spawn(_worker, q) for i in range(count)]
-    while True:
-        try:
-            names = r.zrevrange(_format("user"), index, index + count)
-            for name in names:
-                q.put(name)
-            if len(names) < count:
-                break
-            index += count
-            logger.info("Updated %d users." % index)
-        except Exception as e:
-            logger.error(e)
-            break
-    for i in range(len(workers)):
-        q.put(StopIteration)
-    gevent.joinall(workers, timeout=4000)
+    r = redis()
+    for i in range(30):
+        if r.sadd(_format('update:users:index'), i):
+            update_user.delay(i, step)
 
 
 @w.task(ignore_result=True)
@@ -293,6 +277,17 @@ def update_users_location():
 def rank():
     (country_rank.si() | city_rank.si())()
 
+    now = datetime.now()
+    year, month = now.year - int(math.ceil((2 - now.month) / 12.)), (now.month - 2) % 12 + 1
+    user_rank_func = None
+    key = 'month.%d.%2d' % (year, month)
+    for lang in mongodb().languages.find().sort(key, -1).limit(25):
+        if user_rank_func:
+            user_rank_func = user_rank_func | user_rank.si(lang['_id'])
+        else:
+            user_rank_func = user_rank.si(lang['_id'])
+    user_rank_func()
+
 
 @w.task
 def user_rank(lang, country='China', months=24):
@@ -310,6 +305,4 @@ def user_rank(lang, country='China', months=24):
         pipe.zadd(t_key, user['_id'], v)
         i % 1000 or pipe.execute()
     r_key = _format("country:{0}.lang:{1}:user".format(country, lang))
-    pipe.delete(r_key)
-    pipe.rename(t_key, r_key)
-    pipe.execute()
+    pipe.delete(r_key).rename(t_key, r_key).execute()

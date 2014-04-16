@@ -11,7 +11,7 @@ CELERY_INCLUDE = ['ghdata.tasks']
 BROKER_URL = config.REDIS_URI
 # Task Result backend
 CELERY_RESULT_BACKEND = config.REDIS_URI
-CELERY_TASK_RESULT_EXPIRES = 60*60*24*10
+CELERY_TASK_RESULT_EXPIRES = 60*60*12
 
 # pool and threads
 # CELERYD_POOL = "gevent"
@@ -53,6 +53,7 @@ CELERY_ROUTES = {
     'ghdata.tasks.fetch_worker': {'queue': 'fetch'},
     'ghdata.tasks.country_rank': {'queue': 'stats'},
     'ghdata.tasks.city_rank': {'queue': 'stats'},
+    'ghdata.tasks.user_rank': {'queue': 'stats'},
     'ghdata.tasks.update_users_location': {'queue': 'stats'},
     'ghdata.tasks.rank': {'queue': 'stats'},
     'ghdata.tasks.translate': {'queue': 'stats'},
