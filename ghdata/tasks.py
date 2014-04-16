@@ -5,12 +5,11 @@ from __future__ import absolute_import
 
 from .worker import worker as w, logger
 
-import gevent
-import gevent.queue
 import requests
 import time
 from datetime import datetime, timedelta
 import functools
+import math
 from collections import defaultdict
 from translate import Translator
 from celery import group
@@ -44,13 +43,21 @@ def concurrency(n):
     return wrapper
 
 
-@w.task
-def update_user(username):
+@w.task(ignore_result=True)
+def update_user(index, step):
     '''update user's info from github'''
-    logger.info("Updating %s" % username)
-    while not _update_user(username):
-        logger.info("Holding github user task for 10 minutes.")
-        time.sleep(10 * 60)
+    r = redis()
+    users = r.zrevrange(_format("user"), index, index)
+    if len(users) > 0:
+        logger.info("Updating %s at %d." % (users[0], index))
+        index = 0
+        while not _update_user(users[0]) and index < 6:
+            logger.info("Holding github user task for 10 minutes.")
+            time.sleep(10 * 60)
+            index += 1
+        update_user.delay(index + step, step)
+    else:
+        r.srem(_format('update:users:index'), index % step)
 
 
 def _update_user(username):
@@ -95,7 +102,7 @@ def _update_user(username):
     return True
 
 
-@w.task
+@w.task(ignore_result=True)
 def update_location(location, username=None):
     '''get location data(contry, city...) from location name'''
     if location in [None, ""]:
@@ -122,34 +129,12 @@ def update_location(location, username=None):
 
 
 @w.task(ignore_result=True)
-@concurrency(1)
-def update_all_users():
+def update_all_users(step=30):
     '''Traverse all users and retrieve its info from github.'''
-    def _worker(q):
-        for name in q:
-            try:
-                update_user.delay(name).get(3600*2)
-            except Exception as e:
-                logger.error(e)
-
-    index, count, r = 0, 100, redis()
-    q = gevent.queue.Queue(count)
-    workers = [gevent.spawn(_worker, q) for i in range(count)]
-    while True:
-        try:
-            names = r.zrevrange(_format("user"), index, index + count)
-            for name in names:
-                q.put(name)
-            if len(names) < count:
-                break
-            index += count
-            logger.info("Updated %d users." % index)
-        except Exception as e:
-            logger.error(e)
-            break
-    for i in range(len(workers)):
-        q.put(StopIteration)
-    gevent.joinall(workers, timeout=4000)
+    r = redis()
+    for i in range(30):
+        if r.sadd(_format('update:users:index'), i):
+            update_user.delay(i, step)
 
 
 @w.task(ignore_result=True)
@@ -162,7 +147,7 @@ def fetch_timeline(year=2012, month=3, day=1):
     group(fetch_worker.s(h.year, h.month, h.day, h.hour) for h in times)()
 
 
-@w.task(time_limit=3600*4)
+@w.task(time_limit=3600 * 4)
 def fetch_worker(year, month, day, hour):
     '''fetch one hour's timeline data and save it to db.'''
     try:
@@ -171,7 +156,7 @@ def fetch_worker(year, month, day, hour):
         logger.error("Error during processing %d-%d-%d %d hr: %s" % (year, month, day, hour, e))
 
 
-@w.task(time_limit=3600*8)
+@w.task(time_limit=3600 * 8)
 @concurrency(1)
 def country_rank():
     '''Activities per country and month.'''
@@ -210,7 +195,7 @@ def country_rank():
         stats.update({'_id': country}, {'$set': value}, True)
 
 
-@w.task(time_limit=3600*8)
+@w.task(time_limit=3600 * 8)
 @concurrency(1)
 def city_rank():
     '''Activities per city and month.'''
@@ -292,12 +277,32 @@ def update_users_location():
 def rank():
     (country_rank.si() | city_rank.si())()
 
+    now = datetime.now()
+    year, month = now.year - int(math.ceil((2 - now.month) / 12.)), (now.month - 2) % 12 + 1
+    user_rank_func = None
+    key = 'month.%d.%2d' % (year, month)
+    for lang in mongodb().languages.find().sort(key, -1).limit(25):
+        if user_rank_func:
+            user_rank_func = user_rank_func | user_rank.si(lang['_id'])
+        else:
+            user_rank_func = user_rank.si(lang['_id'])
+    user_rank_func()
 
-# @w.task
-# def lang_rank(lang, year=None):
-#     year = year or datetime.now().year
-#     key = 'contrib.%s.%d' % (lang, year)
-#     users = {}
-#     for user in mongodb().users_stats.find({key: {'$ne': None}}, {key: 1}):
-#         data = user['contrib'][lang]['%d' % year]
-#         users[user['_id']] = sum([data[month] for month in data])
+
+@w.task
+def user_rank(lang, country='China', months=24):
+    now = datetime.now()
+    year, month = now.year - int(math.ceil((months - now.month + 1) / 12.)), (now.month - months - 1) % 12 + 1
+
+    pipe = redis().pipeline()
+    t_key = _format(str(time.time()))
+    key = 'contrib.%s' % lang
+    for i, user in enumerate(mongodb().users_stats.find({key: {'$ne': None}, 'loc.country': country},
+                                                        {key: 1, 'loc': 1})):
+        print user['_id']
+        cont = user['contrib'][lang]
+        v = sum(cont[y][m] for y in cont for m in cont[y] if (int(y) > year or (int(y) == year and int(m) >= month)))
+        pipe.zadd(t_key, user['_id'], v)
+        i % 1000 or pipe.execute()
+    r_key = _format("country:{0}.lang:{1}:user".format(country, lang))
+    pipe.delete(r_key).rename(t_key, r_key).execute()
