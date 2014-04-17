@@ -50,11 +50,11 @@ def update_user(index, step):
     users = r.zrevrange(_format("user"), index, index)
     if len(users) > 0:
         logger.info("Updating %s at %d." % (users[0], index))
-        index = 0
-        while not _update_user(users[0]) and index < 6:
+        count = 0
+        while not _update_user(users[0]) and count < 6:
             logger.info("Holding github user task for 10 minutes.")
             time.sleep(10 * 60)
-            index += 1
+            count += 1
         update_user.delay(index + step, step)
     else:
         r.srem(_format('update:users:index'), index % step)
@@ -278,31 +278,28 @@ def rank():
     (country_rank.si() | city_rank.si())()
 
     now = datetime.now()
-    year, month = now.year - int(math.ceil((2 - now.month) / 12.)), (now.month - 2) % 12 + 1
-    user_rank_func = None
+    year, month = (now.year-1, 12) if now.month == 1 else (now.year, now.month-1)
     key = 'month.%d.%2d' % (year, month)
-    for lang in mongodb().languages.find().sort(key, -1).limit(25):
-        if user_rank_func:
-            user_rank_func = user_rank_func | user_rank.si(lang['_id'])
-        else:
-            user_rank_func = user_rank.si(lang['_id'])
-    user_rank_func()
+    # get languages sorted by activity of last month in the world.
+    langs = [lang['_id'] for lang in mongodb().languages.find().sort(key, -1).limit(25)]
+    user_rank.delay(langs)
 
 
 @w.task
-def user_rank(lang, country='China', months=24):
+def user_rank(langs, country='China', months=24):
     now = datetime.now()
     year, month = now.year - int(math.ceil((months - now.month + 1) / 12.)), (now.month - months - 1) % 12 + 1
 
     pipe = redis().pipeline()
-    t_key = _format(str(time.time()))
-    key = 'contrib.%s' % lang
-    for i, user in enumerate(mongodb().users_stats.find({key: {'$ne': None}, 'loc.country': country},
-                                                        {key: 1, 'loc': 1})):
-        print user['_id']
-        cont = user['contrib'][lang]
-        v = sum(cont[y][m] for y in cont for m in cont[y] if (int(y) > year or (int(y) == year and int(m) >= month)))
-        pipe.zadd(t_key, user['_id'], v)
-        i % 1000 or pipe.execute()
-    r_key = _format("country:{0}.lang:{1}:user".format(country, lang))
-    pipe.delete(r_key).rename(t_key, r_key).execute()
+    t_keys = {lang: _format('%s:%s' % (str(time.time()), lang)) for lang in langs}
+    for i, user in enumerate(mongodb().users_stats.find({'loc.country': country, 'contrib': {'$ne': None}},
+                                                        {'contrib': 1, 'loc': 1})):
+        for lang in user.get('contrib', {}):
+            if lang in langs:
+                c = user['contrib'][lang]
+                v = sum(c[y][m] for y in c for m in c[y] if (int(y) > year or (int(y) == year and int(m) >= month)))
+                pipe.zadd(t_keys[lang], user['_id'], v)
+        i % 100 or pipe.execute()
+    for lang in langs:
+        r_key = _format("country:{0}.lang:{1}:user".format(country, lang))
+        pipe.delete(r_key).rename(t_keys[lang], r_key).execute()
