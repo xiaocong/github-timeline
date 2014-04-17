@@ -1,7 +1,11 @@
+Beaker==1.6.4
 amqp==1.4.4
 anyjson==0.3.3
 backports.ssl-match-hostname==3.4.0.2
 billiard==3.3.0.16
+bottle==0.12.5
+bottle-mongo==0.2.2
+bottle-redis==0.2.1
 celery==3.1.10
 flower==0.6.0
 gevent==1.0
