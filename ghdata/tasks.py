@@ -300,6 +300,10 @@ def user_rank(langs, country='China', months=24):
                 v = sum(c[y][m] for y in c for m in c[y] if (int(y) > year or (int(y) == year and int(m) >= month)))
                 pipe.zadd(t_keys[lang], user['_id'], v)
         i % 100 or pipe.execute()
+    pipe.execute()
     for lang in langs:
         r_key = _format("country:{0}.lang:{1}:user".format(country, lang))
-        pipe.delete(r_key).rename(t_keys[lang], r_key).execute()
+        try:
+            pipe.delete(r_key).rename(t_keys[lang], r_key).execute()
+        except:
+            pass
