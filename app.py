@@ -91,6 +91,8 @@ def _rank(lang, country, page, page_count, rdb, mongodb):
         'pages': pages,
         'page': page,
         'page_count': page_count,
+        'language': lang,
+        'country': country,
         'data': data
     }
 
