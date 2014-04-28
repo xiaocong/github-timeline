@@ -23,7 +23,7 @@ def _google_geocode(location):
         params = {"address": location, "sensor": "false"}
         r = None
         try:
-            r = requests.get(goapi_url, params=params)
+            r = requests.get(goapi_url, params=params, timeout=30)
             if r.status_code != requests.codes.ok:
                 return None
         except:
@@ -67,7 +67,7 @@ def geo_info(location):
     r = None
     try:
         # Resolve the timezone associated with these coordinates.
-        r = requests.get(tzapi_url.format(**geo["loc"]))
+        r = requests.get(tzapi_url.format(**geo["loc"]), timeout=30)
         if r.status_code != requests.codes.ok:
             logging.warn("Timezone zone request failed:\n{0}".format(r.url))
             return geo

@@ -81,7 +81,7 @@ def _update_user(username):
         # Perform a conditional fetch on the database.
         headers = {"If-None-Match": etag} if etag else {}
         r = requests.get(ghapi_url.format(username=username), params=auth,
-                         headers=headers)
+                         headers=headers, timeout=30)
         code = r.status_code
         if code == requests.codes.ok:
             data = r.json()
