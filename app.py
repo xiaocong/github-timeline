@@ -3,7 +3,7 @@
 
 from gevent import monkey; monkey.patch_all()
 
-from bottle import Bottle, request, response, run
+from bottle import Bottle, request, response, run, abort
 import bottle.ext.mongo
 import bottle.ext.redis
 import os
@@ -51,8 +51,23 @@ def options(*args):
 
 
 @app.get("/users/:id")
-def user(id, mongodb):
-    return mongodb.users_stats.find_one({'_id': id})
+def user(id, rdb, mongodb):
+    user = mongodb.users_stats.find_one({'_id': id})
+    if not user:
+        return abort(404)
+    user['rank'] = {}
+    langs = [lang for lang in user.get('contrib', {})]
+    pipe = rdb.pipeline()
+    if user.get('loc', {}).get('country') == 'China':
+        for lang in langs:
+            key = _format("country:{0}.lang:{1}:user".format(user.get('loc', {}).get('country', 'China'), lang))
+            pipe.zrevrank(key, id)
+        user['rank']['China'] = {lang: rank + 1 for lang, rank in zip(langs, pipe.execute())}
+    for lang in langs:
+        key = _format("lang:{0}:user".format(lang))
+        pipe.zrevrank(key, id)
+    user['rank']['World'] = {lang: rank + 1 for lang, rank in zip(langs, pipe.execute())}
+    return user
 
 
 @app.get("/languages")
@@ -73,12 +88,12 @@ def rank(rdb, mongodb):
     return _rank(lang, country, page, page_count, rdb, mongodb)
 
 
-@cache.cache("rank", expire=3600)
+@cache.cache("rank", expire=3600*12)
 def _rank(lang, country, page, page_count, rdb, mongodb):
     key = _format("country:{0}.lang:{1}:user".format(country, lang))
     total = rdb.zcard(key)
     pages = total/page_count + (total % page_count and 1)
-    users = rdb.zrevrange(key, page*page_count, (page+1)*page_count)
+    users = rdb.zrevrange(key, page*page_count, (page+1)*page_count - 1)
     w_key = _format("lang:{0}:user".format(lang))
     pipe = rdb.pipeline()
     for u in users:
@@ -91,6 +106,8 @@ def _rank(lang, country, page, page_count, rdb, mongodb):
         'pages': pages,
         'page': page,
         'page_count': page_count,
+        'language': lang,
+        'country': country,
         'data': data
     }
 
