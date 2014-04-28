@@ -52,7 +52,7 @@ def options(*args):
 
 @app.get("/users/:id")
 def user(id, rdb, mongodb):
-    user = mongodb.users_stats.find_one({'_id': id})
+    user = mongodb.users_stats.find_one({'_id': id.lower()})
     if not user:
         return abort(404)
     user['rank'] = {}
