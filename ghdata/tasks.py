@@ -43,7 +43,7 @@ def concurrency(n):
     return wrapper
 
 
-@w.task(ignore_result=True)
+@w.task
 def update_user(index, step):
     '''update user's info from github'''
     r = redis()
@@ -51,13 +51,12 @@ def update_user(index, step):
     if len(users) > 0:
         logger.info("Updating %s at %d." % (users[0], index))
         count = 0
+        r.set(_format('update:users:index:%d' % (index % step)), index, 7200)
         while not _update_user(users[0]) and count < 6:
-            logger.info("Holding github user task for 10 minutes.")
+            logger.info("Holding github user task:%d for 10 minutes." % (index % step))
             time.sleep(10 * 60)
             count += 1
         update_user.delay(index + step, step)
-    else:
-        r.srem(_format('update:users:index'), index % step)
 
 
 def _update_user(username):
@@ -133,7 +132,8 @@ def update_all_users(step=30):
     '''Traverse all users and retrieve its info from github.'''
     r = redis()
     for i in range(30):
-        if r.sadd(_format('update:users:index'), i):
+        if r.incr(_format('update:users:index:%d' % i)) == 1:
+            r.expire(_format('update:users:index:%d' % i), 7200)
             update_user.delay(i, step)
 
 
