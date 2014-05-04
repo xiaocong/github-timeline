@@ -89,7 +89,7 @@ def rank(rdb, mongodb):
     return _rank(lang, country, page, page_count, rdb, mongodb)
 
 
-@cache.cache("rank", expire=3600*12)
+@cache.cache("rank", expire=3600)
 def _rank(lang, country, page, page_count, rdb, mongodb):
     key = _format("country:{0}.lang:{1}:user".format(country, lang))
     total = rdb.zcard(key)
