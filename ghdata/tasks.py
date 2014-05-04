@@ -142,7 +142,7 @@ def update_all_users(step=30):
 def fetch_timeline(year=2012, month=3, day=1):
     '''worker process to go through all timeline data since 2012/3/1.'''
     since = datetime(year, month, day)
-    hours = int((datetime.today() - since).total_seconds()/3600)
+    hours = int((datetime.today() - since).total_seconds() / 3600)
     times = (since + timedelta(hours=i) for i in range(hours))
     group(fetch_worker.s(h.year, h.month, h.day, h.hour) for h in times)()
 
@@ -278,7 +278,7 @@ def rank():
     (country_rank.si() | city_rank.si())()
 
     now = datetime.now()
-    year, month = (now.year-1, 12) if now.month == 1 else (now.year, now.month-1)
+    year, month = (now.year - 1, 12) if now.month == 1 else (now.year, now.month - 1)
     key = 'month.%d.%2d' % (year, month)
     # get languages sorted by activity of last month in the world.
     langs = [lang['_id'] for lang in mongodb().languages.find().sort(key, -1).limit(25)]
@@ -292,7 +292,9 @@ def user_rank(langs, country='China', months=24):
 
     pipe = redis().pipeline()
     t_keys = {lang: _format('%s:%s' % (str(time.time()), lang)) for lang in langs}
-    for i, user in enumerate(mongodb().users_stats.find({'loc.country': country, 'contrib': {'$ne': None}},
+    for i, user in enumerate(mongodb().users_stats.find({'loc.country': country,
+                                                         'contrib': {'$ne': None},
+                                                         'robot': {'$ne', True}},
                                                         {'contrib': 1, 'loc': 1})):
         for lang in user.get('contrib', {}):
             if lang in langs:
