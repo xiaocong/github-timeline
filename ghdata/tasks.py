@@ -294,7 +294,7 @@ def user_rank(langs, country='China', months=24):
     t_keys = {lang: _format('%s:%s' % (str(time.time()), lang)) for lang in langs}
     for i, user in enumerate(mongodb().users_stats.find({'loc.country': country,
                                                          'contrib': {'$ne': None},
-                                                         'robot': {'$ne', True}},
+                                                         'robot': {'$ne': True}},
                                                         {'contrib': 1, 'loc': 1})):
         for lang in user.get('contrib', {}):
             if lang in langs:
