@@ -52,7 +52,7 @@ def options(*args):
 
 @app.get("/users/:id")
 def user(id, rdb, mongodb):
-    user = mongodb.users_stats.find_one({'_id': id})
+    user = mongodb.users_stats.find_one({'_id': id.lower()})
     if not user:
         return abort(404)
     user['rank'] = {}
@@ -62,11 +62,11 @@ def user(id, rdb, mongodb):
         for lang in langs:
             key = _format("country:{0}.lang:{1}:user".format(user.get('loc', {}).get('country', 'China'), lang))
             pipe.zrevrank(key, id)
-        user['rank']['China'] = {lang: rank + 1 for lang, rank in zip(langs, pipe.execute())}
+        user['rank']['China'] = {lang: rank + 1 for lang, rank in zip(langs, pipe.execute()) if rank is not None}
     for lang in langs:
         key = _format("lang:{0}:user".format(lang))
         pipe.zrevrank(key, id)
-    user['rank']['World'] = {lang: rank + 1 for lang, rank in zip(langs, pipe.execute())}
+    user['rank']['World'] = {lang: rank + 1 for lang, rank in zip(langs, pipe.execute()) if rank is not None}
     return user
 
 
