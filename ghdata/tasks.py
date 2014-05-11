@@ -20,6 +20,7 @@ from .geo import geo_info
 from .fetch import fetch_one, events_process, file_process, events_process_lang_contrib
 
 ghapi_url = "https://api.github.com/users/{username}"
+search_url = 'https://api.github.com/search/repositories'
 geoname_url = "http://api.geonames.org/search"
 
 
@@ -135,6 +136,94 @@ def update_all_users(step=30):
         if r.incr(_format('update:users:index:%d' % i)) == 1:
             r.expire(_format('update:users:index:%d' % i), 7200)
             update_user.delay(i, step)
+
+
+@w.task
+def update_repos(created_from=None, created_to=None, stars_from=1, stars_to=None):
+    if created_from:
+        cf = datetime(year=created_from[0], month=created_from[1], day=created_from[2])
+    else:
+        cf = datetime(year=2008, month=1, day=1)
+    if created_to:
+        ct = datetime(year=created_to[0], month=created_to[1], day=created_to[2])
+    else:
+        now = datetime.now()
+        ct = datetime(year=now.year, month=now.month, day=now.day)
+    if not _update_repos(cf, ct, stars_from, stars_to):
+        if stars_to is None:
+            update_repos.delay((cf.year, cf.month, cf.day), (ct.year, ct.month, ct.day), stars_from, stars_from + 511)
+            update_repos.delay((cf.year, cf.month, cf.day), (ct.year, ct.month, ct.day), stars_from + 512, None)
+        elif stars_from < stars_to:
+            mid = (stars_to + stars_from)/2
+            update_repos.delay((cf.year, cf.month, cf.day), (ct.year, ct.month, ct.day), stars_from, mid)
+            update_repos.delay((cf.year, cf.month, cf.day), (ct.year, ct.month, ct.day), mid + 1, stars_to)
+        elif cf < ct:
+            mid = cf + (ct - cf)/2
+            mid = datetime(year=mid.year, month=mid.month, day=mid.day)
+            update_repos.delay((cf.year, cf.month, cf.day), (mid.year, mid.month, mid.day), stars_from, stars_to)
+            mid = mid + timedelta(days=1)
+            update_repos.delay((mid.year, mid.month, mid.day), (ct.year, ct.month, ct.day), stars_from, stars_to)
+        else:
+            logger.error('Can not split the request anymore...')
+
+
+def _update_repos(cf, ct, sf, st):
+    created = 'created:%d-%02d-%02d..%d-%02d-%02d' % (cf.year, cf.month, cf.day, ct.year, ct.month, ct.day)
+    if st in [None, 0]:
+        stars = 'stars:>=%d' % sf
+    else:
+        stars = 'stars:%d..%d' % (sf, st)
+    params = {'page': 1, 'per_page': 100, 'q': '%s %s' % (created, stars)}
+    client_id, client_secret = GITHUB_CRENDENTIALS.split(":")
+    if client_id is not None and client_secret is not None:
+        params["client_id"] = client_id
+        params["client_secret"] = client_secret
+    data = _search_repos(search_url, params)
+    if data and 'total_count' in data:
+        if data['total_count'] > 1000:
+            logger.info('Searching repos with %s %s, count: %d, split it.' % (created, stars, data['total_count']))
+            return False
+        save_repos(data['items'])
+        pages = int(math.ceil(1.0 * data['total_count'] / params['per_page']))
+        for page in range(2, pages + 1):
+            params['page'] = page
+            logger.warning('Search page: %d/%d with %s %s.' % (page, pages, created, stars))
+            data = _search_repos(search_url, params)
+            if data and 'items' in data:
+                if data['incomplete_results']:
+                    logger.error('Incomplete results during fetching page %d with %s %s' % (page, created, stars))
+                save_repos(data['items'])
+            else:
+                logger.error('Error during fetching page %d with %s %s' % (page, created, stars))
+    return True
+
+
+def save_repos(repos):
+    '''save repos' info into db'''
+    logger.info('saving repos...')
+    pass
+
+
+def _search_repos(url, params):
+    r = None
+    try:
+        r = requests.get(url, params=params, timeout=60)
+        code = r.status_code
+        if code == requests.codes.ok:
+            return r.json()
+        elif code == 403:
+            logger.info("*** Limitation reached.")
+            time.sleep(60)
+            return _search_repos(url, params)
+        else:
+            logger.error("Error http code: %n." % code)
+            return None
+    except:
+        logger.error("Exception occured during searching repos.")
+        return None
+    finally:
+        if r:
+            r.close()
 
 
 @w.task(ignore_result=True)

@@ -49,6 +49,7 @@ BROKER_TRANSPORT_OPTIONS = {
 
 CELERY_ROUTES = {
     'ghdata.tasks.update_user': {'queue': 'github'},
+    'ghdata.tasks.update_repos': {'queue': 'github'},
     'ghdata.tasks.update_location': {'queue': 'geo'},
     'ghdata.tasks.fetch_worker': {'queue': 'fetch'},
     'ghdata.tasks.country_rank': {'queue': 'stats'},
