@@ -149,16 +149,16 @@ def update_repos(created_from=None, created_to=None, stars_from=1, stars_to=None
     else:
         now = datetime.now()
         ct = datetime(year=now.year, month=now.month, day=now.day)
-    if not _update_repos(cf, ct, stars_from, stars_to):
+    if not _update_repos(cf, ct, stars_from, stars_to):  # split in case of False
         if stars_to is None:
             update_repos.delay((cf.year, cf.month, cf.day), (ct.year, ct.month, ct.day), stars_from, stars_from + 511)
             update_repos.delay((cf.year, cf.month, cf.day), (ct.year, ct.month, ct.day), stars_from + 512, None)
         elif stars_from < stars_to:
-            mid = (stars_to + stars_from)/2
+            mid = (stars_to + stars_from) / 2
             update_repos.delay((cf.year, cf.month, cf.day), (ct.year, ct.month, ct.day), stars_from, mid)
             update_repos.delay((cf.year, cf.month, cf.day), (ct.year, ct.month, ct.day), mid + 1, stars_to)
         elif cf < ct:
-            mid = cf + (ct - cf)/2
+            mid = cf + (ct - cf) / 2
             mid = datetime(year=mid.year, month=mid.month, day=mid.day)
             update_repos.delay((cf.year, cf.month, cf.day), (mid.year, mid.month, mid.day), stars_from, stars_to)
             mid = mid + timedelta(days=1)
@@ -168,6 +168,7 @@ def update_repos(created_from=None, created_to=None, stars_from=1, stars_to=None
 
 
 def _update_repos(cf, ct, sf, st):
+    '''search repos in specified scope. return false in case of the length of results > 1000'''
     created = 'created:%d-%02d-%02d..%d-%02d-%02d' % (cf.year, cf.month, cf.day, ct.year, ct.month, ct.day)
     if st in [None, 0]:
         stars = 'stars:>=%d' % sf
@@ -183,16 +184,16 @@ def _update_repos(cf, ct, sf, st):
         if data['total_count'] > 1000:
             logger.info('Searching repos with %s %s, count: %d, split it.' % (created, stars, data['total_count']))
             return False
-        save_repos(data['items'])
+        save_repos(data.get('items', []))
         pages = int(math.ceil(1.0 * data['total_count'] / params['per_page']))
         for page in range(2, pages + 1):
             params['page'] = page
             logger.warning('Search page: %d/%d with %s %s.' % (page, pages, created, stars))
             data = _search_repos(search_url, params)
-            if data and 'items' in data:
+            if data:
                 if data['incomplete_results']:
                     logger.error('Incomplete results during fetching page %d with %s %s' % (page, created, stars))
-                save_repos(data['items'])
+                save_repos(data.get('items', []))
             else:
                 logger.error('Error during fetching page %d with %s %s' % (page, created, stars))
     return True
@@ -200,8 +201,11 @@ def _update_repos(cf, ct, sf, st):
 
 def save_repos(repos):
     '''save repos' info into db'''
-    logger.info('saving repos...')
-    pass
+    repos_stats = mongodb().repositories
+    for repo in repos:
+        repos_stats.update({'_id': repo['full_name']},
+                           {'$set': {'info': repo}},
+                           True)
 
 
 def _search_repos(url, params):

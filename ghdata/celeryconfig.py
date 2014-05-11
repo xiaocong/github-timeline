@@ -25,6 +25,10 @@ CELERYBEAT_SCHEDULE = {
         # 'schedule': timedelta(minutes=1)
         'schedule': crontab(minute=30)
     },
+    'crawl-repos-info': {
+        'task': 'ghdata.tasks.update_repos',
+        'schedule': crontab(minute=0, hour=4, day_of_week='sunday')
+    },
     'fetch-timeline-data': {
         'task': 'ghdata.tasks.fetch_timeline',
         'args': (2012, 3, 1),
