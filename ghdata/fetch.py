@@ -35,7 +35,7 @@ def fetch_one(year, month, day, hour):
         url = archive_url.format(year=year, month=month, day=day, hour=hour)
         r = None
         try:
-            r = requests.get(url)
+            r = requests.get(url, timeout=120)
             if r.status_code == 200:
                 f = NamedTemporaryFile("wb", delete=False)
                 f.write(r.content)
