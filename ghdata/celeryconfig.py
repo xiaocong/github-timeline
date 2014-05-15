@@ -25,6 +25,10 @@ CELERYBEAT_SCHEDULE = {
         # 'schedule': timedelta(minutes=1)
         'schedule': crontab(minute=30)
     },
+    'crawl-repos-info': {
+        'task': 'ghdata.tasks.update_repos',
+        'schedule': crontab(minute=0, hour=4, day_of_week='sunday')
+    },
     'fetch-timeline-data': {
         'task': 'ghdata.tasks.fetch_timeline',
         'args': (2012, 3, 1),
@@ -49,6 +53,7 @@ BROKER_TRANSPORT_OPTIONS = {
 
 CELERY_ROUTES = {
     'ghdata.tasks.update_user': {'queue': 'github'},
+    'ghdata.tasks.update_repos': {'queue': 'github'},
     'ghdata.tasks.update_location': {'queue': 'geo'},
     'ghdata.tasks.fetch_worker': {'queue': 'fetch'},
     'ghdata.tasks.country_rank': {'queue': 'stats'},

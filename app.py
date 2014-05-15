@@ -11,6 +11,7 @@ from datetime import datetime
 
 from ghdata.config import MONGODB_URI, REDIS_HOST, REDIS_PORT, REDIS_DB
 from ghdata.db import format_key as _format
+import ghdata.tasks as tasks
 
 app = Bottle()
 app.install(bottle.ext.mongo.MongoPlugin(uri=MONGODB_URI, db="github", json_mongo=True))
@@ -64,11 +65,17 @@ def user(id, rdb, mongodb):
             key = _format("country:{0}.lang:{1}:user".format(user.get('loc', {}).get('country', 'China'), lang))
             pipe.zrevrank(key, id)
         user['rank']['China'] = {lang: rank + 1 for lang, rank in zip(langs, pipe.execute()) if rank is not None}
+    user['loc_zh'] = {key: translate(text) for key, text in user.get('loc', {}).items() if key in ['country', 'state', 'city']}
     for lang in langs:
         key = _format("lang:{0}:user".format(lang))
         pipe.zrevrank(key, id)
     user['rank']['World'] = {lang: rank + 1 for lang, rank in zip(langs, pipe.execute()) if rank is not None}
     return user
+
+
+@cache.cache("rank")
+def translate(text):
+    return tasks.translate(text)
 
 
 @app.get("/languages")
